@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# local editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# runtime + debug artefacts
+*.log
+.pytest_cache/
+.ruff_cache/
+
+# the node's own upload/workspace folder, if it ever lands inside the package
+workspace/
+uploads/
+
+# local A/B research harness: hardcoded to one machine and to a LoRA that is not
+# part of this project. Kept out of the published tree on purpose.
+tools/

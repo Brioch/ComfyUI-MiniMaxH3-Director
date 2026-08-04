@@ -1,0 +1,27 @@
+name: Publish to Comfy registry
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-node:
+    name: Publish Custom Node to registry
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'CGlide' }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Publish Custom Node
+        uses: Comfy-Org/publish-node-action@main
+        with:
+          # Create the key at https://registry.comfy.org (Publisher -> API Keys) and
+          # store it as the repository secret REGISTRY_ACCESS_TOKEN.
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

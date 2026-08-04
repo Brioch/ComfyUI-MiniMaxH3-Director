@@ -1,0 +1,24 @@
+[project]
+name = "minimaxh3-director"
+description = "A timeline editor for MiniMax H3 — storyboard prompts, first/last keyframes, image/video/audio references, native joint audio, live sampling preview, retakes and shot chaining."
+version = "0.1.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+# Nothing beyond what ComfyUI itself already installs.
+dependencies = []
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+
+[project.urls]
+Repository = "https://github.com/CGlide/ComfyUI-MiniMaxH3-Director"
+"Bug Tracker" = "https://github.com/CGlide/ComfyUI-MiniMaxH3-Director/issues"
+
+[tool.comfy]
+PublisherId = "cglide"
+DisplayName = "MiniMax H3 Director"
+Icon = ""
+# comfy_api.latest, the packed AV latent and H3 support all landed in ComfyUI 0.30.0.
+requires-comfyui = ">=0.30.0"
