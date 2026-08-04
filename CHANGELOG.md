@@ -18,7 +18,8 @@ The LTX Director timeline editor by WhatDreamsCost, ported to MiniMax H3.
 - Model-card limits enforced: ≤ 9 images, ≤ 3 videos (2–15 s each, ≤ 15 s total),
   ≤ 3 audio clips, ≤ 12 files in total.
 - Live **COMPILED PROMPT** panel, served by the same planner the node runs — it cannot
-  drift from what is actually encoded.
+  drift from what is actually encoded. Collapsing it, or switching it off in the gear
+  menu, shrinks the node by exactly that much and releases the canvas underneath.
 
 **Preview Override**
 - Renders the whole shot while it denoises, instead of core's single first latent frame.

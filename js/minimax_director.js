@@ -12766,7 +12766,7 @@ app.registerExtension({
           pCaret.textContent = pCollapsed ? "▸" : "▾";
           pText.style.display = pCollapsed ? "none" : "block";
           pWarn.style.display = (pCollapsed || !pWarn.textContent) ? "none" : "block";
-          this.setDirtyCanvas(true, true);
+          applyPanelHeight(true);
         });
 
         // Fixed height (min == max) so this panel never eats the timeline's space, and
@@ -12785,13 +12785,34 @@ app.registerExtension({
         // not serialised: keeps widgets_values the same length as before this panel existed
         promptWidget.serialize = false;
 
-        // toggled from the gear menu
-        this._mmxSetPromptPreview = (enabled) => {
+        // Changing what getMinHeight/getMaxHeight report is not enough on its own. The
+        // frontend re-reads them in node.arrange(), and the draw loop only calls arrange()
+        // for nodes whose `_widgetSlotsDirty` flag is set — setDirtyCanvas alone just
+        // repaints. Without the flag the node body is drawn at its new height while the
+        // widget's `position: fixed` overlay keeps the old one: an invisible strip left
+        // lying over the canvas that eats clicks and hands right-clicks to the browser's
+        // context menu instead of ComfyUI's.
+        let pAppliedHeight = promptPanelHeight();
+        const applyPanelHeight = (resizeNode) => {
+          const next = promptPanelHeight();
+          const delta = next - pAppliedHeight;
+          pAppliedHeight = next;
+          if (resizeNode && delta) {
+            const floor = (typeof self.computeSize === "function") ? self.computeSize()[1] : 0;
+            self.setSize([self.size[0], Math.max(floor, self.size[1] + delta)]);
+          }
+          self._widgetSlotsDirty = true;   // makes the next frame re-arrange the widgets
+          self.setDirtyCanvas(true, true);
+          if (self.graph) self.graph.setDirtyCanvas(true, true);
+        };
+
+        // toggled from the gear menu; `initial` is the call made on load, where the saved
+        // node size already accounts for the panel and must not be adjusted again
+        this._mmxSetPromptPreview = (enabled, initial) => {
           promptBox.style.display = enabled ? "flex" : "none";
           if (promptWidget.element) promptWidget.element.style.display = enabled ? "flex" : "none";
           if (enabled) self._mmxRefreshPrompt();
-          self.setDirtyCanvas(true, true);
-          if (self.graph) self.graph.setDirtyCanvas(true, true);
+          applyPanelHeight(!initial);
         };
 
         let pTimer = null;
@@ -12845,7 +12866,7 @@ app.registerExtension({
               ed._mmxPromptHooked = true;
             }
             // honour the saved gear-menu setting on load
-            self._mmxSetPromptPreview(self.properties?.showPromptPreview !== false);
+            self._mmxSetPromptPreview(self.properties?.showPromptPreview !== false, true);
           } catch (err) {
             console.error("[MiniMaxDirector] timeline editor init failed:", err);
           }
