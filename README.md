@@ -418,7 +418,8 @@ layout, the interaction design and the bulk of the frontend code are theirs. The
 that this one branched from is by **[CGlide](https://github.com/CGlide)**.
 
 This project is that editor with a MiniMax H3 backend: new conditioning, storyboard prompt
-compilation, packed AV latents, preview, Retake and Chain.
+compilation, packed AV latents, preview, Retake and Chain — by
+[seesee75](https://github.com/seesee75-commits).
 
 MiniMax H3 by [MiniMax](https://huggingface.co/MiniMaxAI), ComfyUI packaging by
 [Comfy-Org](https://huggingface.co/Comfy-Org).
