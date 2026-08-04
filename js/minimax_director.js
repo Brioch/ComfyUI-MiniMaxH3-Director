@@ -2679,7 +2679,7 @@ class TimelineEditor {
     helpBtn.title = "Help / Documentation";
     helpBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      window.open("https://github.com/CGlide/ComfyUI-MiniMaxH3-Director#readme", "_blank");
+      window.open("https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director#readme", "_blank");
     });
 
     this.isSnapping = this.node.properties.isSnapping !== false;
