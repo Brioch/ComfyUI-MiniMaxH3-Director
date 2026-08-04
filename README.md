@@ -8,7 +8,8 @@ see the exact prompt the model will receive while you are still editing it.
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
 
-<!-- TODO: screenshot of the Director node with a filled timeline -->
+![The MiniMax H3 Director node](docs/images/director-node.png)
+
 <!-- TODO: demo video -->
 
 > This is the [LTX Director](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)
@@ -154,6 +155,8 @@ Other quantisations on the repo work too: `*_bf16` (66 GB, best quality),
 ## Quick start
 
 1. **Workflow → Open** → `example_workflows/MiniMax H3 Director.json`
+   (or drag [`docs/images/workflow-overview.png`](docs/images/workflow-overview.png)
+   onto the canvas — the same graph is embedded in that screenshot)
 2. Fix any red nodes — usually the model dropdowns, if your filenames differ.
 3. Double-click a segment on the main track and type what should happen.
 4. Drag an image onto the track for a first-frame anchor (optional).
@@ -181,6 +184,11 @@ VAELoader ×2 ─┘                       ├→ positive ┘                  
                                       ├→ combined_audio → CreateVideo.audio
                                       └→ fps ───────────→ CreateVideo.fps
 ```
+
+![The example workflow](docs/images/workflow-overview.png)
+
+The example packs the sampler and the two decoders into subgraphs so the graph stays
+readable; open them if you want to change sampler, scheduler or steps.
 
 ## The timeline
 
@@ -285,6 +293,9 @@ latent, so on MiniMax it falls through to the same single frame.
 
 **MiniMax H3 Preview Override** goes between the Director's `model` output and the sampler
 and renders the whole shot as it denoises.
+
+<img src="docs/images/preview-override-node.png" alt="The Preview Override node" width="360">
+
 
 | Widget | What it does |
 |---|---|
