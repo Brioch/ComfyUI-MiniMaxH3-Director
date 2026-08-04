@@ -138,6 +138,18 @@ def _load_event_tensor(ev, fps, win_start):
     return media.load_image_tensor(seg)
 
 
+class _Unconnected:
+    """Distinguishes an empty optional socket from a lazy one that is merely unevaluated.
+
+    ComfyUI passes None for both, so a plain `None` default cannot tell them apart.
+    """
+    def __repr__(self):
+        return "<unconnected>"
+
+
+_UNCONNECTED = _Unconnected()
+
+
 def pick_model(model_fl2va, model_ref2va, ref_mode_on):
     """Choose the weights the toolbar switch calls for.
 
@@ -192,11 +204,15 @@ class MiniMaxH3Director(io.ComfyNode):
                 "surrounding frames."
             ),
             inputs=[
-                io.Model.Input("model", display_name="model (t2v/i2v)", optional=True,
+                # lazy: only the checkpoint the toolbar actually calls for gets loaded.
+                # See check_lazy_status below — without it ComfyUI resolves both inputs
+                # before the node runs and reads ~42 GB of weights to use half of them.
+                io.Model.Input("model", display_name="model (t2v/i2v)", optional=True, lazy=True,
                                tooltip="The fl2va weights (minimax_h3_fl2va_*), used when the "
                                        "toolbar is on 'Refs OFF'. Connect both models and the "
-                                       "node picks whichever the toolbar switch calls for."),
-                io.Model.Input("model_ref2va", display_name="model (ref2v)", optional=True,
+                                       "node loads whichever the toolbar switch calls for — "
+                                       "the other one is never read from disk."),
+                io.Model.Input("model_ref2va", display_name="model (ref2v)", optional=True, lazy=True,
                                tooltip="The ref2va weights (minimax_h3_ref2va_*), used when the "
                                        "toolbar is on 'Refs ON'. Optional — with only one model "
                                        "connected that one is used either way."),
@@ -287,6 +303,31 @@ class MiniMaxH3Director(io.ComfyNode):
                                          "to splice the result back into the base video. Empty when retake is off."),
             ],
         )
+
+    # ------------------------------------------------------------ lazy models
+
+    @classmethod
+    def check_lazy_status(cls, timeline_data="", model=_UNCONNECTED,
+                          model_ref2va=_UNCONNECTED, **_):
+        """Ask for the one checkpoint the toolbar switch calls for, and only that one.
+
+        fl2va and ref2va are ~21 GB each. Without this, ComfyUI resolves both inputs
+        before execute() runs, so every render reads both from disk to throw one away —
+        which is what pushed a 32 GB machine into a page-file crash (issue #2).
+
+        `None` means *connected but not evaluated yet*, so it cannot be used to detect an
+        empty socket; that is what the _UNCONNECTED sentinel is for. Same trick core uses
+        in comfy_extras/nodes_logic.py.
+        """
+        ref_on = plan.ref_mode_from(plan.parse_timeline(timeline_data))
+        order = ("model_ref2va", "model") if ref_on else ("model", "model_ref2va")
+        have = {"model": model, "model_ref2va": model_ref2va}
+
+        for name in order:                       # preferred first, then the fallback
+            if have[name] is _UNCONNECTED:
+                continue                         # nothing wired here, try the other
+            return [name] if have[name] is None else []
+        return []                                # neither connected: execute() raises
 
     # ---------------------------------------------------------------- execute
 

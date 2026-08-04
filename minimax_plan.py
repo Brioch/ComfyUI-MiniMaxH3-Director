@@ -80,6 +80,16 @@ def parse_timeline(timeline_data):
         return {}
 
 
+def ref_mode_from(tdata):
+    """Is the toolbar on 'Refs ON (ref2va)'?
+
+    Lives here rather than inline in the planner because the Director's lazy-input check
+    has to answer the same question *before* the plan is built — the two must not drift,
+    or the node would load one checkpoint and condition for the other.
+    """
+    return str(tdata.get("reference_mode", "OFF")).upper() != "OFF"
+
+
 def retake_state(tdata):
     """The retake panel's state, or None when retake mode is off / has no base video."""
     if not tdata.get("retakeMode"):
@@ -286,7 +296,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         global_prompt = tdata.get(
             "retake_global_prompt" if retake else "global_prompt", "") or ""
 
-    ref_mode_on = str(tdata.get("reference_mode", "OFF")).upper() != "OFF"
+    ref_mode_on = ref_mode_from(tdata)
     if prompt_format is None:
         prompt_format = str(tdata.get("prompt_format", FORMAT_MINIMAX)).lower()
     if prompt_format not in (FORMAT_MINIMAX, FORMAT_COMFYUI):

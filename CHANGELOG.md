@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- **Only the checkpoint the toolbar asks for is loaded.** Both model inputs are now lazy
+  (`check_lazy_status`), so `Refs OFF` never reads `ref2va` and `Refs ON` never reads
+  `fl2va`. Before this, ComfyUI resolved both inputs before the node ran and read ~42 GB
+  of weights to use half of them — enough to push a 32 GB machine into a page-file crash
+  while the text encoder was still loading ([#2](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/2)).
+  Connecting only one model still works, with the same warning as before.
+
 ## 0.1.0 — first public release
 
 The LTX Director timeline editor by WhatDreamsCost, ported to MiniMax H3.

@@ -148,6 +148,10 @@ ComfyUI/models/
 Connect both to the Director's two model inputs and the toolbar switch picks the right
 one. Connecting only one is fine — the node warns rather than silently using the wrong path.
 
+Only the selected checkpoint is ever read from disk: the model inputs are lazy, so with
+the toolbar on **Refs OFF** the `ref2va` loader never runs at all. Wiring both costs you
+disk space, not RAM.
+
 Other quantisations on the repo work too: `*_bf16` (66 GB, best quality),
 `*_int8_convrot` (34 GB), `*_pruned_int8_convrot` (21 GB). The text encoder also comes as
 `_bf16` and `_int8_convrot` if `nvfp4_awq` does not run on your GPU.
