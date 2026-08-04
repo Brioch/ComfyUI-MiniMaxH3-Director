@@ -20,3 +20,16 @@ uploads/
 # local A/B research harness: hardcoded to one machine and to a LoRA that is not
 # part of this project. Kept out of the published tree on purpose.
 tools/
+
+# Internal notes. The maintainer's guide lives OUTSIDE this tree, in
+# ComfyUI-Easy-Install/_notes/ — deliberately, so no git command can publish it.
+# These patterns are the second line of defence for anything that lands here anyway.
+# Only README.md and CHANGELOG.md are meant to be public markdown.
+docs/internal/
+notes/
+_notes/
+NOTES.md
+MAINTAINING.md
+TODO.md
+*.local.md
+*.private.md
