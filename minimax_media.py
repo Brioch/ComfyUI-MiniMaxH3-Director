@@ -511,6 +511,31 @@ async def analyze_character_endpoint(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
+async def unload_model(provider, base_url, model):
+    """Evict the model from VRAM. Never raises — freeing memory must not fail a render.
+
+    `keep_alive: 0` on the generate call already asks for this, but a second, explicit
+    request is cheap and covers the cases where it did not take: a request that errored
+    before the option was honoured, or a server that keeps its own TTL.
+    Only Ollama exposes an unload API; LM Studio and OpenAI-compatible servers manage
+    residency themselves.
+    """
+    if provider != "ollama" or not model:
+        return False
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post("%s/api/generate" % base_url,
+                                    json={"model": model, "keep_alive": 0},
+                                    timeout=10) as response:
+                await response.text()
+        log.info("[MiniMaxDirector] asked Ollama to release '%s'.", model)
+        return True
+    except Exception as e:
+        log.debug("[MiniMaxDirector] could not unload '%s': %s", model, e)
+        return False
+
+
 @PromptServer.instance.routes.post("/minimax_director/unload_ollama")
 async def unload_ollama_endpoint(request):
     """Evict the analysis VLM from VRAM right before a run so it doesn't fight H3 for memory."""

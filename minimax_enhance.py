@@ -413,6 +413,11 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                                      "ignore that when asked politely, so the request is "
                                      "capped and the result trimmed to a sentence end. "
                                      "0 disables both."),
+                io.Boolean.Input("unload_after", default=True, optional=True,
+                                 tooltip="Drop the vision model from VRAM when done, so it is "
+                                         "not still resident while H3 samples. Turn off only "
+                                         "while iterating on prompts — reloading costs seconds, "
+                                         "an OOM costs the render. Ollama only."),
                 io.Combo.Input("on_error", options=["passthrough", "fail"],
                                default="passthrough", optional=True,
                                tooltip="'passthrough' hands your raw idea on and warns, so a "
@@ -424,13 +429,17 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                 io.Image.Output(display_name="ref_images",
                                 tooltip="The same images, batched. Wire into the Director's "
                                         "ref_images."),
+                io.Float.Output(display_name="duration_seconds",
+                                tooltip="The duration you set above, passed on so you only "
+                                        "type it once. Wire into the Director's `duration` "
+                                        "input (the connection-only one, in seconds)."),
             ],
         )
 
     @classmethod
     async def execute(cls, images=None, idea="", preset=PRESET_GLOBAL, system_prompt="",
                       duration_seconds=5.0, provider="ollama", base_url="", model="",
-                      seed=0, max_image_size=768, max_words=500,
+                      seed=0, max_image_size=768, max_words=500, unload_after=True,
                       on_error="passthrough") -> io.NodeOutput:
         tensors = _collect(images)
         if len(tensors) > MAX_IMAGES:
@@ -475,10 +484,14 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
         # and those never get written, which leaves the Director's overall_soundscape and
         # non_diegetic_music empty. Measured: 300 words at 600 tokens lost them entirely.
         cap = int(max_words * 2.2) + 400 if max_words else None
+        # Ollama drops the model right after answering when keep_alive is 0. That matters
+        # here: the VLM and H3 are usually on the same card, and a 7B vision model still
+        # resident when sampling starts is the difference between a render and an OOM.
+        keep_alive = 0 if unload_after else 300
         try:
             raw = await media.vlm_generate(b64, user, provider, url, model_name,
                                            system_prompt=system, timeout=300,
-                                           max_tokens=cap)
+                                           max_tokens=cap, keep_alive=keep_alive)
             prompt = clean_prompt(raw, preset, max_words=int(max_words))
             if not prompt:
                 raise media.VLMError("The model returned nothing usable.")
@@ -496,7 +509,8 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                 try:
                     tail = await media.vlm_generate(
                         [], prompt, provider, url, model_name,
-                        system_prompt=SYSTEM_AUDIO_ONLY, timeout=120, max_tokens=300)
+                        system_prompt=SYSTEM_AUDIO_ONLY, timeout=120, max_tokens=300,
+                        keep_alive=keep_alive)
                     merged = clean_prompt("%s\n%s" % (prompt, tail), preset)
                     if re.search(r"^\s*(?:audio|sound|sfx)\s*:", merged, re.I | re.M):
                         prompt = merged
@@ -513,9 +527,14 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
             log.warning("[MiniMaxEnhance] %s — passing your text through unchanged.", e,
                         exc_info=not isinstance(e, media.VLMError))
             prompt = (idea or "").strip()
+        finally:
+            # Backstop for keep_alive, and it also runs when the call blew up half way —
+            # that is exactly when a model is left sitting in VRAM.
+            if unload_after:
+                await media.unload_model(provider, url, model_name)
 
         log.info("[MiniMaxEnhance] %d chars:\n%s", len(prompt), prompt)
-        return io.NodeOutput(prompt, batched)
+        return io.NodeOutput(prompt, batched, float(duration_seconds))
 
 
 NODE_CLASS_MAPPINGS = {"MiniMaxH3EnhancePromptCS": MiniMaxH3EnhancePrompt}
