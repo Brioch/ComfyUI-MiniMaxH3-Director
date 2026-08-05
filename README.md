@@ -9,10 +9,6 @@ see the exact prompt the model will receive while you are still editing it.
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
 [![version](https://img.shields.io/badge/version-0.1.1-brightgreen)](CHANGELOG.md)
 
-> **0.1.1** · 2026-08-04 — only the checkpoint the toolbar switch calls for is loaded now.
-> `Refs OFF` no longer reads the `ref2va` weights, which is ~21 GB less per render.
-> → [Changelog](CHANGELOG.md)
-
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
 <!-- TODO: demo video -->
@@ -25,6 +21,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## Contents
 
+- [News](#news)
 - [Why](#why)
 - [What you get](#what-you-get)
 - [Requirements](#requirements)
@@ -40,6 +37,15 @@ see the exact prompt the model will receive while you are still editing it.
 - [Reporting a bug](#reporting-a-bug)
 - [Credits](#credits)
 - [License](#license)
+
+---
+
+## News
+
+**0.1.1** · 2026-08-04 — only the checkpoint the toolbar switch calls for is loaded now.
+`Refs OFF` no longer reads the `ref2va` weights, which is ~21 GB less per render.
+
+Full history in the [changelog](CHANGELOG.md).
 
 ---
 
