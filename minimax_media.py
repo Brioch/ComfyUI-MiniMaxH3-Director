@@ -359,10 +359,24 @@ _ANALYZE_PROMPT = (
 )
 
 
+def normalize_base_url(url, fallback=""):
+    """Make a typed-in address usable.
+
+    "127.0.0.1:11434" is what people actually enter, and aiohttp rejects it outright with
+    NonHttpUrlClientError because it has no scheme. Assume http:// when none is given.
+    """
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return (fallback or "").strip().rstrip("/")
+    if "://" not in url:
+        url = "http://" + url
+    return url
+
+
 def _resolve_provider(data):
     provider = (data.get("provider") or "ollama").lower()
     defs = _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS["ollama"])
-    base_url = (data.get("base_url") or defs["url"]).rstrip("/")
+    base_url = normalize_base_url(data.get("base_url"), defs["url"])
     model = data.get("model") or defs["model"]
     return provider, base_url, model
 
@@ -450,10 +464,16 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
     except aiohttp.ClientConnectorError:
         raise VLMError("Could not connect to %s at %s. Make sure the server is running."
                        % (provider, base_url))
-    except aiohttp.ServerTimeoutError:
+    except (aiohttp.ServerTimeoutError, asyncio.TimeoutError):
         raise VLMError("%s did not answer within %ss." % (provider, timeout))
-    except asyncio.TimeoutError:
-        raise VLMError("%s did not answer within %ss." % (provider, timeout))
+    except aiohttp.InvalidURL:
+        raise VLMError("'%s' is not a usable address for %s." % (base_url, provider))
+    except VLMError:
+        raise
+    except Exception as e:
+        # Everything reaching a caller has to be a VLMError, or the node's passthrough
+        # guard cannot catch it and a typo in the URL takes the whole run down.
+        raise VLMError("%s: %s: %s" % (provider, type(e).__name__, e))
 
     return strip_thinking(text)
 

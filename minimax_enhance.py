@@ -389,8 +389,10 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                                default="ollama", optional=True,
                                tooltip="Where the vision model runs."),
                 io.String.Input("base_url", default="", optional=True,
-                                tooltip="Empty = the provider's default "
-                                        "(Ollama 127.0.0.1:11434, LM Studio 127.0.0.1:1234)."),
+                                tooltip="Empty = the provider's default (Ollama "
+                                        "http://127.0.0.1:11434, LM Studio "
+                                        "http://127.0.0.1:1234). http:// is added if you "
+                                        "leave it off. No path — just host and port."),
                 io.String.Input("model", default="", optional=True,
                                 tooltip="Model name. Must be a VISION model — a text-only model "
                                         "will ignore your images without saying so. Empty falls "
@@ -450,7 +452,7 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
 
         provider = (provider or "ollama").lower()
         defaults = media._PROVIDER_DEFAULTS.get(provider, media._PROVIDER_DEFAULTS["ollama"])
-        url = (base_url or defaults["url"]).rstrip("/")
+        url = media.normalize_base_url(base_url, defaults["url"])
         model_name = model or defaults["model"]
         system = (system_prompt or "").strip() or system_for(preset, max_words)
 
@@ -500,10 +502,16 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                         prompt = merged
                 except media.VLMError as e:
                     log.warning("[MiniMaxEnhance] sound lines unavailable: %s", e)
-        except media.VLMError as e:
+        except Exception as e:
+            # Deliberately broad: 'passthrough' promises the run survives, and the thing
+            # that took a run down in practice was aiohttp rejecting a URL without a
+            # scheme -- not a VLMError at all. The traceback still reaches the console.
             if on_error == "fail":
-                raise ValueError("MiniMax H3 Enhance Prompt: %s" % e)
-            log.warning("[MiniMaxEnhance] %s — passing your text through unchanged.", e)
+                if isinstance(e, media.VLMError):
+                    raise ValueError("MiniMax H3 Enhance Prompt: %s" % e)
+                raise
+            log.warning("[MiniMaxEnhance] %s — passing your text through unchanged.", e,
+                        exc_info=not isinstance(e, media.VLMError))
             prompt = (idea or "").strip()
 
         log.info("[MiniMaxEnhance] %d chars:\n%s", len(prompt), prompt)
