@@ -150,8 +150,37 @@ def build_subject_definitions(char_slots, ref_image_slots, ref_video_segs, ref_a
     return lines, subject_of_slot
 
 
+def alignment_instruction(has_first, has_last, shot_count, seconds):
+    """The image-alignment line the base guide requires as the very first line.
+
+    Quoted verbatim from VIDEO_PROMPT_WRITING_GUIDE_base_en.md, including its own
+    inconsistency: I2VA and L2VA bracket the tokens (`<Picture 1>`, `[Shot 1]`) while
+    FL2VA does not. The model was trained on that text, so it is reproduced as written
+    rather than tidied up.
+
+    T2VA has no instruction, and the reference guide does not ask for one at all, so this
+    only applies to the fl2va path.
+    """
+    n = max(1, int(shot_count))
+    s = "%.2f" % max(0.0, float(seconds))
+    if has_first and has_last:
+        return ("How the reference pictures align with the target video — Picture 1 "
+                "(from Shot 1) aligns with the 0.00-second mark of the target video; "
+                "Picture 2 (from Shot %d) aligns with the %s-second mark of the target "
+                "video." % (n, s))
+    if has_first:
+        return ("For the target video, at 0.00 seconds into the target video, "
+                "<Picture 1> (from [Shot 1]) is fully referenced.")
+    if has_last:
+        return ("How the reference pictures align with the target video — <Picture 1> "
+                "(from [Shot %d]) aligns with the %s-second mark of the target video."
+                % (n, s))
+    return ""
+
+
 def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
-                               subject_lines=None, retention_lines=None):
+                               subject_lines=None, retention_lines=None,
+                               instruction=""):
     """The notation MiniMax documents in VIDEO_PROMPT_WRITING_GUIDE_*.md.
 
     `integrated_multimodal_description: [Shot 1] … [Shot 2] At 00:05.000, …`, with the
@@ -160,6 +189,11 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
     something real to put in them — an empty heading is worse than none.
     """
     parts = []
+
+    # the guide: "must be the first line of the final prompt, followed by one blank line
+    # before the core fields" — joining parts with a blank line gives exactly that
+    if (instruction or "").strip():
+        parts.append(instruction.strip())
 
     if subject_lines:
         parts.append("subject_definitions: " + " ".join(subject_lines))
@@ -368,14 +402,27 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 break
             ref_image_slots.append({"source": "input"})
 
+        # Timeline images in the order they appear on the timeline. `events` is already
+        # chronological, so <Picture n> counts up with time: opening frame, whatever sits
+        # in between, closing frame. ref2va has no keyframe slot, so the first/last frames
+        # are references here too — they just keep their role in the wording.
+        # Character slots and the ref_images input stay ahead of all of them, so a
+        # character's number never shifts when an image is dropped on the timeline.
+        keyframe_labels = {ROLE_FIRST: "opening frame", ROLE_LAST: "closing frame"}
         for ev in events:
-            if ev["role"] != ROLE_MIDDLE or len(ref_image_slots) >= MAX_REF_IMAGES:
-                continue
+            if len(ref_image_slots) >= MAX_REF_IMAGES:
+                break
             ordinal = len(ref_image_slots) + 1
-            ref_image_slots.append({"source": "timeline", "event": ev})
-            ref_notes.append("<Picture %d> is the timeline image at %s%s" % (
-                ordinal, fmt_seconds(ev["rel_start_f"] / fps),
-                " (%s)" % ev["name"] if ev["name"] else ""))
+            slot = {"source": "timeline", "event": ev}
+            label = keyframe_labels.get(ev["role"])
+            if label:
+                slot["keyframe"] = ev["role"]
+                ref_notes.append("<Picture %d> is the %s" % (ordinal, label))
+            else:
+                ref_notes.append("<Picture %d> is the timeline image at %s%s" % (
+                    ordinal, fmt_seconds(ev["rel_start_f"] / fps),
+                    " (%s)" % ev["name"] if ev["name"] else ""))
+            ref_image_slots.append(slot)
     else:
         for slot_idx, slot in enumerate(char_slots):
             if slot["description"]:
@@ -396,15 +443,6 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             audio.sort(key=lambda s: float(s.get("start", 0)))
             ref_audio_segs = audio[:MAX_REF_AUDIOS]
 
-        # ref2va weights have no keyframe slot, so timeline keyframes join the references
-        for role, label in ((ROLE_FIRST, "opening frame"), (ROLE_LAST, "closing frame")):
-            for ev in events:
-                if ev["role"] != role or len(ref_image_slots) >= MAX_REF_IMAGES:
-                    continue
-                ref_notes.append("<Picture %d> is the %s"
-                                 % (len(ref_image_slots) + 1, label))
-                ref_image_slots.append({"source": "timeline", "event": ev, "keyframe": role})
-
     # --- total file cap ---
     # The per-type caps are not the whole story: H3 also takes at most 12 reference files
     # across all types. Trim from the back so the earlier, more deliberate references win.
@@ -420,8 +458,11 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         ref_warnings.append(
             "H3 takes at most %d reference files in total; %d were dropped."
             % (MAX_REF_FILES, total_files - MAX_REF_FILES))
+        # drop the notes for every picture that was trimmed, not just the first one
+        kept_pictures = len(ref_image_slots)
         ref_notes = [n for n in ref_notes
-                     if not n.startswith("<Picture %d>" % (len(ref_image_slots) + 1))]
+                     if not (n.startswith("<Picture ")
+                             and int(n[9:n.index(">")]) > kept_pictures)]
 
     # reference videos: each 2-15s, and no more than 15s of them together
     if ref_video_segs:
@@ -444,6 +485,12 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             kept.append(seg)
             budget -= usable
         ref_video_segs = kept
+
+    # --- output length ---
+    # Computed before the prompt because the alignment instruction has to name the
+    # *effective* duration, i.e. after snapping to the 17k+5 grid, not the window length.
+    length = align_frame_count(max(5, int(round(window_seconds * MODEL_FPS))))
+    actual_seconds = length / MODEL_FPS
 
     # --- prompt ---
     subject_lines, subject_of_slot = [], {}
@@ -480,8 +527,17 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                     % ", ".join("<Audio %d>" % (i + 1) for i in range(len(ref_audio_segs))))
         if ref_notes:
             retention_lines.extend(n + "." for n in ref_notes)
+        # Only the fl2va path: ref2va has no keyframe slot and its guide asks for no
+        # instruction line. `written` mirrors the shot numbering the body will use.
+        instruction = ""
+        if not ref_mode_on:
+            written_shots = len([s for s in shots if (s["prompt"] or "").strip()])
+            instruction = alignment_instruction(
+                any(e["role"] == ROLE_FIRST for e in events),
+                any(e["role"] == ROLE_LAST for e in events),
+                written_shots, actual_seconds)
         prompt = compile_storyboard_minimax(global_prompt, shots, soundscape, music,
-                                            subject_lines, retention_lines)
+                                            subject_lines, retention_lines, instruction)
     else:
         prompt = compile_storyboard(global_prompt, shots, window_seconds)
         if ref_notes:
@@ -495,7 +551,6 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     if fallback:
         prompt = "video"
 
-    length = align_frame_count(max(5, int(round(window_seconds * MODEL_FPS))))
     has_keyframe = any(ev["role"] in (ROLE_FIRST, ROLE_LAST) for ev in events) or bool(retake)
     mode = "ref2va" if ref_mode_on else ("fl2va" if has_keyframe else "t2va")
 
@@ -509,5 +564,5 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         "char_tag_values": char_tag_values,
         "win_start": win_start, "duration_frames": duration_frames, "fps": fps,
         "window_seconds": window_seconds,
-        "length": length, "actual_seconds": length / MODEL_FPS,
+        "length": length, "actual_seconds": actual_seconds,
     }

@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.1-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.2-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -42,8 +42,9 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
-**0.1.1** · 2026-08-04 — only the checkpoint the toolbar switch calls for is loaded now.
-`Refs OFF` no longer reads the `ref2va` weights, which is ~21 GB less per render.
+**0.1.2** · 2026-08-06 — reference images are numbered along the timeline again, and
+prompts in `Refs OFF` now carry the image-alignment instruction MiniMax's guide requires.
+The Director Chain node is withdrawn until it can actually be operated.
 
 Full history in the [changelog](CHANGELOG.md).
 
@@ -63,14 +64,13 @@ can read it before you spend a render on it.
 
 ## What you get
 
-Four nodes, category **MiniMax H3**:
+Three nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
 | **MiniMax H3 Director** | The timeline. Outputs a patched `model`, the compiled `positive` conditioning, an empty joint AV `latent`, the muxed `combined_audio`, plus `fps` / `width` / `height` / `length` / `prompt` / `retake_info`. |
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
-| **MiniMax H3 Director Chain** | Renders timelines longer than one H3 shot. |
 
 Editing features carried over from LTX Director: main track, reference-video track, audio
 track, ruler in seconds or frames, drag / resize / copy / paste, prompt zones per segment,
@@ -365,19 +365,13 @@ across the whole thing instead of the generated one.
 
 ## Longer than 15 seconds
 
-H3 is trained for 4–15 s. **MiniMax H3 Director Chain** goes past that by cutting
-the timeline into in-range windows and opening each one on the previous window's final
-frame. It reads the same `timeline_data` and plans every window through the same planner,
-so a chained render interprets the timeline exactly like a single-window one.
+Not solved yet. There was a **Director Chain** node that rendered a long timeline as a
+chain of anchored windows, and its sampling worked — but there was no usable way to hand
+it a timeline, so it has been withdrawn rather than shipped as a feature nobody can
+operate. The code stays in the repository; the reasoning is written down at the top of
+`minimax_chain.py`.
 
-It samples internally — wire a `SAMPLER` and `SIGMAS` **into** it rather than a sampler
-after it — because the anchor for window N+1 does not exist until window N has been
-decoded, which a static graph cannot express. Outputs are finished `images` + `audio`, so
-it replaces the sampler *and* both decoders. The duplicate seam frame is dropped at every join.
-
-Seam quality is bounded by how well the VAE reconstructs the anchor frame, so it improves
-with resolution: measured seam error was 5.2× the median frame-to-frame difference at
-480×288, but only 2.3× at 1024×576. Chain at the resolution you intend to deliver.
+Until it returns, H3's trained range is the limit: 4-15 s per render.
 
 ## Troubleshooting
 
@@ -454,7 +448,7 @@ layout, the interaction design and the bulk of the frontend code are theirs. The
 that this one branched from is by **[CGlide](https://github.com/CGlide)**.
 
 This project is that editor with a MiniMax H3 backend: new conditioning, storyboard prompt
-compilation, packed AV latents, preview, Retake and Chain — by
+compilation, packed AV latents, preview and Retake — by
 [seesee75](https://github.com/seesee75-commits).
 
 MiniMax H3 by [MiniMax](https://huggingface.co/MiniMaxAI), ComfyUI packaging by

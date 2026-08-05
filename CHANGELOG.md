@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.2
+
+- **Reference images are numbered along the timeline.** `<Picture N>` now counts up with
+  time — opening frame, whatever sits in between, closing frame. Previously the keyframes
+  were assigned in a second pass, so an image dropped in the middle took `<Picture 1>` and
+  pushed the opening frame to `<Picture 2>`
+  ([#5](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/5)).
+  Character slots keep their numbers ahead of the timeline, so a character never renumbers
+  when you drop an image on a track.
+- **`Refs OFF` prompts carry the image-alignment instruction** the base prompt guide
+  requires as their first line, in the exact wording MiniMax documents for I2VA, FL2VA and
+  L2VA. T2VA has none, and the reference guide does not ask for one, so `Refs ON` is
+  unchanged ([#6](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/6)).
+  The duration it names is the effective one, after snapping to the 17k+5 grid.
+- **Director Chain is withdrawn.** Its sampling worked, but there was no usable way to
+  give it a timeline: the editor attaches only to the Director, which has no
+  `timeline_data` output to wire from. Shipping a feature nobody can operate is worse than
+  shipping none ([#4](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/4)).
+  The code and the full reasoning stay in `minimax_chain.py`.
+- Retake Stitch passes the video through unchanged when there is no retake, instead of
+  failing.
+- Fixed: when the 12-file reference cap trimmed several images, only the first one's note
+  was removed from the prompt.
+
 ## 0.1.1
 
 - **Only the checkpoint the toolbar asks for is loaded.** Both model inputs are now lazy

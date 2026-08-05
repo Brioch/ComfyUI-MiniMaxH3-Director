@@ -1,5 +1,27 @@
 """Render a timeline longer than one H3 shot, as a chain of anchored windows.
 
+WITHDRAWN — this node is not registered in __init__.py and does not appear in the menu.
+
+The sampling here works; it was verified against a live server, one window per toolbar
+mode, correct frame counts. What does not work is *giving it a timeline*. The editor in
+js/minimax_director.js attaches only to MiniMaxH3DirectorCS, the Director has no
+timeline_data output to wire from, and on the Director that widget is hidden
+(HIDDEN_WIDGET_NAMES). The only route left was: right-click the Director, open
+Properties, copy a multi-kilobyte JSON blob, paste it here — and repeat after every
+edit to the timeline.
+
+Two things would have to change before this ships again:
+  1. a timeline_data output on the Director, so one wire keeps the two in sync;
+  2. a decision about the design itself. Swallowing the sampler and both decoders costs
+     the live preview, per-window progress, clean interruption, and duplicates half the
+     Director's canvas settings. Long-form video deserves its own interaction model
+     rather than being bolted onto this one.
+
+Seam quality is also resolution-bound: measured error at the join was 5.2x the median
+frame-to-frame difference at 480x288, and 2.3x at 1024x576.
+
+--- what it was meant to do -------------------------------------------------------
+
 MiniMax H3 is trained for roughly 5 to 15 seconds (124-362 frames at 24 fps). Past that
 it drifts, loops, or runs out of VRAM. This node renders a long timeline as a sequence of
 in-range windows instead: each window is planned from the same timeline, and every window
@@ -94,9 +116,11 @@ class MiniMaxH3DirectorChain(io.ComfyNode):
                 "and SIGMAS in rather than a KSampler after it."
             ),
             inputs=[
-                io.Model.Input("model", display_name="model (t2v/i2v)", optional=True,
+                # lazy, for the same reason as in the Director: without it ComfyUI reads
+                # both ~21 GB checkpoints before the node runs, to use one of them.
+                io.Model.Input("model", display_name="model (t2v/i2v)", optional=True, lazy=True,
                                tooltip="fl2va weights, used when the timeline's toolbar is on 'Refs OFF'."),
-                io.Model.Input("model_ref2va", display_name="model (ref2v)", optional=True,
+                io.Model.Input("model_ref2va", display_name="model (ref2v)", optional=True, lazy=True,
                                tooltip="ref2va weights, used when the toolbar is on 'Refs ON'. "
                                        "With only one model connected that one is used either way."),
                 io.Clip.Input("clip"),
@@ -142,6 +166,17 @@ class MiniMaxH3DirectorChain(io.ComfyNode):
                                  tooltip="The storyboard prompt of every window, in order."),
             ],
         )
+
+    @classmethod
+    def check_lazy_status(cls, timeline_data="", model=director._UNCONNECTED,
+                          model_ref2va=director._UNCONNECTED, **kwargs):
+        """Ask for one checkpoint, exactly as the Director does.
+
+        Every window of a chained render uses the same toolbar mode, so a single decision
+        up front covers the whole run. Delegated so the two can never drift apart.
+        """
+        return director.MiniMaxH3Director.check_lazy_status(
+            timeline_data=timeline_data, model=model, model_ref2va=model_ref2va, **kwargs)
 
     @classmethod
     def execute(cls, clip, vae, sampler, sigmas, timeline_data, noise_seed,
