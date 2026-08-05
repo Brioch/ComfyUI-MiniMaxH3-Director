@@ -385,6 +385,27 @@ Stale frontend cache. Ctrl+F5. In a private window it will look correct if that 
 The joint latent must go to `VAEDecode` with the **video** VAE and `VAEDecodeAudio` with
 the **audio** VAE. Swapping the two VAEs is the usual cause.
 
+**The finished video is a flat, featureless grey, but the audio is fine and the live
+preview looked right.**
+The latent is good and the video VAE is producing NaN. Flat grey — not noise, not black,
+every pixel the same value — is what NaN looks like after clamping. `latent2rgb` previews
+keep working because they never touch the VAE.
+
+Confirm it in a minute instead of a full render: set the Preview Override's `decode` to
+`vae (quality)`. That runs the same video VAE, so if the preview goes grey too, the VAE
+is where it breaks.
+
+The thing to try is precision. `minimax_h3_video_vae_fp16` runs in fp16, and ComfyUI's own
+help text for `--fp16-vae` says it "might cause black images". Start ComfyUI with
+**`--fp32-vae`**. fp32 is the *only* alternative here: ComfyUI declares this VAE's working
+dtypes as `[float16, float32]`, so `--bf16-vae` silently gets you one of those two. The
+decoder grows from ~4.9 GB to ~10 GB, which on a 16 GB card means partial offload and a
+slower decode; `--cpu-vae` is the slow-but-certain fallback.
+
+Reported once so far, on ROCm/Windows, where fp16 convolution kernels take different code
+paths than on CUDA. Not reproduced on CUDA, and the fp32 remedy is not yet confirmed by
+the reporter — if you hit this, please say whether it helped.
+
 **Out of memory.**
 Lower the resolution first (768 short edge is native, but 480 works), then `length`. With
 `vae (quality)` previews, lower `preview_frames` to 4 — a VAE preview allocates as much as
