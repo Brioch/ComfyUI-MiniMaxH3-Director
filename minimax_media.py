@@ -367,10 +367,100 @@ def _resolve_provider(data):
     return provider, base_url, model
 
 
+class VLMError(RuntimeError):
+    """A VLM round-trip that failed with a message worth showing the user verbatim."""
+
+
+def strip_thinking(text):
+    """Drop a reasoning preamble. Models with the `thinking` capability emit one even
+    when asked not to, and it must never reach the prompt."""
+    text = (text or "").strip()
+    if "</think>" in text:
+        text = text.split("</think>")[-1].strip()
+    elif text.startswith("<think>"):        # unterminated block: nothing usable survives
+        text = ""
+    return text
+
+
+async def vlm_generate(images_b64, prompt, provider, base_url, model,
+                       system_prompt=None, timeout=120, keep_alive=0, max_tokens=None):
+    """One vision-model round-trip, shared by the Analyze endpoint and the Enhance node.
+
+    Kept provider-shaped rather than generic on purpose: Ollama takes raw base64 in an
+    `images` array on /api/generate, everyone else takes data URLs in OpenAI message
+    content on /v1/chat/completions.
+
+    `keep_alive=0` makes Ollama drop the model right after answering, so it is not still
+    holding VRAM when H3 starts sampling.
+
+    Raises VLMError with a user-facing message; returns the answer with any thinking
+    preamble removed.
+    """
+    import aiohttp
+
+    if provider in ("lmstudio", "custom") and not model:
+        raise VLMError("No model name set for %s. Enter the name of the model you have "
+                       "loaded there." % provider)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            if provider == "ollama":
+                payload = {"model": model, "prompt": prompt, "images": images_b64,
+                           "stream": False, "keep_alive": keep_alive,
+                           # honoured by thinking-capable models; harmless on the rest
+                           "think": False}
+                if system_prompt:
+                    payload["system"] = system_prompt
+                if max_tokens:
+                    # the only thing that actually stops a small model from rambling;
+                    # asking for a word count in the prompt does not
+                    payload["options"] = {"num_predict": int(max_tokens)}
+                async with session.post("%s/api/generate" % base_url, json=payload,
+                                        timeout=timeout) as response:
+                    if response.status != 200:
+                        raise VLMError("Ollama HTTP %s: %s" % (response.status, await response.text()))
+                    body = await response.json()
+                    text = ((body.get("response") or "").strip()
+                            or (body.get("thinking") or "").strip())
+            else:
+                content = [{"type": "text", "text": prompt}]
+                for b64 in images_b64:
+                    content.append({"type": "image_url",
+                                    "image_url": {"url": "data:image/jpeg;base64,%s" % b64}})
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": content})
+                payload = {"model": model, "messages": messages,
+                           "max_tokens": int(max_tokens) if max_tokens else 2048,
+                           "stream": False}
+                async with session.post("%s/v1/chat/completions" % base_url, json=payload,
+                                        timeout=timeout) as response:
+                    if response.status != 200:
+                        raise VLMError("%s HTTP %s: %s" % (provider, response.status, await response.text()))
+                    resp_json = await response.json()
+                    try:
+                        msg = resp_json["choices"][0]["message"]
+                        text = (msg.get("content") or "").strip()
+                        if not text:
+                            # thinking models leave content empty
+                            text = (msg.get("reasoning_content") or "").strip()
+                    except (KeyError, IndexError, TypeError):
+                        raise VLMError("Unexpected response shape from %s." % provider)
+    except aiohttp.ClientConnectorError:
+        raise VLMError("Could not connect to %s at %s. Make sure the server is running."
+                       % (provider, base_url))
+    except aiohttp.ServerTimeoutError:
+        raise VLMError("%s did not answer within %ss." % (provider, timeout))
+    except asyncio.TimeoutError:
+        raise VLMError("%s did not answer within %ss." % (provider, timeout))
+
+    return strip_thinking(text)
+
+
 @PromptServer.instance.routes.post("/minimax_director/analyze_character")
 async def analyze_character_endpoint(request):
     try:
-        import aiohttp
         data = await request.json()
         image_b64 = data.get("image_b64", "")
         char_index = int(data.get("char_index", 0))
@@ -386,55 +476,13 @@ async def analyze_character_endpoint(request):
         if not cleaned:
             return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
 
-        if provider in ("lmstudio", "custom") and not model_name:
-            return web.json_response({
-                "status": "error",
-                "message": "No model name set for %s. Open the gear menu and enter your loaded model's name." % provider,
-            })
-
         log.info("[MiniMaxDirector] Analyzing Character %d via %s (%s, model '%s')...",
                  char_index + 1, provider, base_url, model_name)
-
         try:
-            async with aiohttp.ClientSession() as session:
-                if provider == "ollama":
-                    payload = {"model": model_name, "prompt": _ANALYZE_PROMPT,
-                               "images": cleaned, "stream": False, "keep_alive": 0}
-                    async with session.post("%s/api/generate" % base_url, json=payload, timeout=120) as response:
-                        if response.status != 200:
-                            return web.json_response({"status": "error",
-                                                      "message": "Ollama HTTP %s: %s" % (response.status, await response.text())})
-                        generated_text = ((await response.json()).get("response") or "").strip()
-                else:
-                    content = [{"type": "text", "text": _ANALYZE_PROMPT}]
-                    for b64 in cleaned:
-                        content.append({"type": "image_url",
-                                        "image_url": {"url": "data:image/jpeg;base64,%s" % b64}})
-                    payload = {"model": model_name,
-                               "messages": [{"role": "user", "content": content}],
-                               "max_tokens": 2048, "stream": False}
-                    async with session.post("%s/v1/chat/completions" % base_url, json=payload, timeout=120) as response:
-                        if response.status != 200:
-                            return web.json_response({"status": "error",
-                                                      "message": "%s HTTP %s: %s" % (provider, response.status, await response.text())})
-                        resp_json = await response.json()
-                        try:
-                            msg = resp_json["choices"][0]["message"]
-                            generated_text = (msg.get("content") or "").strip()
-                            if not generated_text:
-                                # thinking models leave content empty
-                                generated_text = (msg.get("reasoning_content") or "").strip()
-                        except (KeyError, IndexError, TypeError):
-                            return web.json_response({"status": "error",
-                                                      "message": "Unexpected response shape from %s." % provider})
-        except aiohttp.ClientConnectorError:
-            return web.json_response({
-                "status": "error",
-                "message": "Could not connect to %s at %s. Make sure the server is running." % (provider, base_url),
-            })
-
-        if "<think>" in generated_text:
-            generated_text = generated_text.split("</think>")[-1].strip()
+            generated_text = await vlm_generate(cleaned, _ANALYZE_PROMPT, provider,
+                                                base_url, model_name)
+        except VLMError as e:
+            return web.json_response({"status": "error", "message": str(e)})
 
         log.info("[MiniMaxDirector] Analysis complete: %s", generated_text)
         return web.json_response({"status": "success", "description": generated_text})
