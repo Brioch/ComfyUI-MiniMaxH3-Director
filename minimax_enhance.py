@@ -201,6 +201,11 @@ _RE_FENCE = re.compile(r"^\s*```[a-zA-Z]*\s*|\s*```\s*$")
 _RE_LABEL = re.compile(r"^\s*(?:%s)\s*:\s*" % "|".join(_SECTION_LABELS), re.I | re.M)
 _RE_REFTAG = re.compile(r"<\s*(?:picture|subject|video|audio|image)\s*\d+\s*>", re.I)
 _RE_SHOT = re.compile(r"\[\s*shot\s*\d+\s*\]\s*", re.I)
+# "[Shot 1] At 00:00.000," — the guide is explicit that the first shot carries no
+# timestamp, and the system prompt says so, but the model writes one anyway often enough
+# that it belongs in the filter rather than in more instruction text.
+_RE_SHOT1_TIME = re.compile(
+    r"(\[\s*shot\s*1\s*\]\s*)At\s+\d{1,2}:\d{2}(?:\.\d{1,3})?\s*,\s*", re.I)
 _RE_TIMESTAMP = re.compile(r"\bAt\s+\d{1,2}:\d{2}(?:\.\d{1,3})?\s*,\s*", re.I)
 _RE_MD_HEAD = re.compile(r"^\s{0,3}#{1,6}\s*", re.M)
 _RE_MD_BULLET = re.compile(r"^\s{0,3}[-*+]\s+", re.M)
@@ -275,6 +280,13 @@ def clean_prompt(text, preset, max_words=0):
         # shot markers and their timestamps belong to the timeline, not to the global block
         text = _RE_SHOT.sub("", text)
         text = _RE_TIMESTAMP.sub("", text)
+    else:
+        text = _RE_SHOT1_TIME.sub(r"\1", text)
+        if text.strip() and not _RE_SHOT.search(text):
+            # Storyboard prose with no markers at all is just a global prompt with extra
+            # steps — measured in 1 of 4 runs. What it describes *is* one shot, so label
+            # it as one and the notation is valid again.
+            text = "[Shot 1] " + text.lstrip()
 
     # a wrapping pair of quotes the model added around the whole answer
     stripped = text.strip()

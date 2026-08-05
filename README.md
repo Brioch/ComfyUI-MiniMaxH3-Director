@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.2-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.3-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -31,6 +31,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [The timeline](#the-timeline)
 - [Prompt format](#prompt-format)
 - [Live preview while sampling](#live-preview-while-sampling)
+- [Writing the prompt for you](#writing-the-prompt-for-you)
 - [Retake Mode](#retake-mode)
 - [Longer than 15 seconds](#longer-than-15-seconds)
 - [Troubleshooting](#troubleshooting)
@@ -41,6 +42,10 @@ see the exact prompt the model will receive while you are still editing it.
 ---
 
 ## News
+
+**0.1.3** · 2026-08-06 — new **MiniMax H3 Enhance Prompt** node: a local vision model
+turns reference images plus a one-line idea into a prompt for the Director, and hands the
+same images on so it describes exactly what H3 will condition on.
 
 **0.1.2** · 2026-08-06 — reference images are numbered along the timeline again, and
 prompts in `Refs OFF` now carry the image-alignment instruction MiniMax's guide requires.
@@ -64,13 +69,14 @@ can read it before you spend a render on it.
 
 ## What you get
 
-Three nodes, category **MiniMax H3**:
+Four nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
 | **MiniMax H3 Director** | The timeline. Outputs a patched `model`, the compiled `positive` conditioning, an empty joint AV `latent`, the muxed `combined_audio`, plus `fps` / `width` / `height` / `length` / `prompt` / `retake_info`. |
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
+| **MiniMax H3 Enhance Prompt** | A local vision model writes the prompt from your reference images. |
 
 Editing features carried over from LTX Director: main track, reference-video track, audio
 track, ruler in seconds or frames, drag / resize / copy / paste, prompt zones per segment,
@@ -350,6 +356,46 @@ duration — `shown_frames × fps ÷ output_frames` — so the preview lasts exa
 the finished shot, thinning included.
 
 </details>
+
+## Writing the prompt for you
+
+**MiniMax H3 Enhance Prompt** hands your reference images and a one-line idea to a local
+vision model and gets back prompt text shaped for H3. The same images come out of its
+`ref_images` output, so what the model described is exactly what H3 conditions on.
+
+```
+LoadImage ─→ image0 ┐
+LoadImage ─→ image1 ├→ Enhance Prompt ─┬→ prompt           → Director.global_prompt
+                    ┘                  ├→ ref_images       → Director.ref_images
+                                       └→ duration_seconds → Director.duration
+```
+
+Sockets grow as you connect, up to nine, and close the gap again when you disconnect.
+
+| Widget | What it does |
+|---|---|
+| `idea` | What you want, in plain words. |
+| `preset` | `global` writes scene, style, subjects and lighting and leaves the shots to your timeline. `storyboard` writes the whole shot sequence with timestamps — only for timelines whose segments carry no prompt text, or the two shot numberings collide. |
+| `system_prompt` | Overrides the built-in instructions, which follow MiniMax's own prompt-writing guide. |
+| `provider` / `base_url` / `model` | Ollama, LM Studio, or any OpenAI-compatible endpoint. `http://` is added if you leave it off; host and port only, no path. |
+| `seed` | ComfyUI caches node outputs, so an unchanged input never re-asks the model. Change this to force a fresh answer. |
+| `max_words` | Caps the description. MiniMax's guide puts it at 350–500 words. |
+| `unload_after` | Frees the vision model's VRAM when done. Leave it on unless you are iterating. |
+| `on_error` | `passthrough` hands your raw text on and warns, so a stopped Ollama does not kill a render. |
+
+**It has to be a vision model.** A text-only model ignores your images without saying so.
+`qwen2.5vl:7b` is a reasonable Ollama default; anything larger writes noticeably better
+prompts. Expect 15–45 s per run, during which the queue is blocked.
+
+**What it deliberately does not write:** section labels, `<Picture N>` numbering, or shot
+markers in `global` mode. The Director compiles the structured MiniMax prompt and assigns
+the reference numbers — a second set from the model would nest structure inside structure
+and collide with the Director's own ordinals. The instructions forbid it and the output is
+filtered anyway, because small models do not reliably obey.
+
+**If the VLM and H3 share a GPU**, the vision model is evicted after each run
+(`unload_after`). Ollama has no per-request device selection, so to put it on a different
+card you set `CUDA_VISIBLE_DEVICES` on the Ollama *service*, not here.
 
 ## Retake Mode
 

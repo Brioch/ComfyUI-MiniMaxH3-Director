@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.3
+
+- **New node: MiniMax H3 Enhance Prompt.** A local vision model (Ollama / LM Studio / any
+  OpenAI-compatible endpoint) turns up to nine reference images plus a one-line idea into
+  prompt text for the Director's `global_prompt`, and passes the same images on to
+  `ref_images` so it describes exactly what H3 will condition on. `duration_seconds` is an
+  output too, so it is typed once
+  ([#1](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/1)).
+  Image sockets grow as you connect and close their gap again when you disconnect.
+- The vision model is evicted from VRAM when the node finishes, including when the call
+  failed part way — that is exactly when one would otherwise be left resident while H3
+  starts sampling. Switchable off while iterating.
+- Two prompt presets: `global` leaves the shots to your timeline, `storyboard` writes the
+  whole shot sequence with timestamps.
+- The model's output is filtered against what the Director owns: section labels,
+  `<Picture N>` numbering and — in `global` mode — shot markers are removed, the first
+  shot's timestamp is dropped in `storyboard` mode, and the length is trimmed to a
+  sentence boundary. Small models do not follow those rules from instructions alone;
+  measured examples are in the commit history.
+- The `Audio:` / `Music:` lines are requested in a second short call when the first answer
+  leaves them out. With `qwen3.5:9b` that moved them from 0 of 4 runs to 4 of 4, so the
+  Director's `overall_soundscape` and `non_diegetic_music` actually get filled.
+- An address without a scheme (`127.0.0.1:11434`) is accepted rather than rejected by the
+  HTTP layer, in the node and in the gear menu's Analyze button alike. `on_error =
+  passthrough` now catches everything, not just VLM errors — the guard that exists to keep
+  a broken endpoint from killing a render was not catching the case that actually happened.
+
 ## 0.1.2
 
 - **Reference images are numbered along the timeline.** `<Picture N>` now counts up with
