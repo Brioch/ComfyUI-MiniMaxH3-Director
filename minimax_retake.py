@@ -120,11 +120,19 @@ class MiniMaxH3RetakeStitch(io.ComfyNode):
             raise ValueError("MiniMax H3 Retake Stitch: retake_info is not valid JSON (%s). "
                              "Wire it from the Director's retake_info output." % e)
         if not info.get("base_video"):
-            raise ValueError(
-                "MiniMax H3 Retake Stitch: retake_info is empty — the Director was not in "
-                "Retake Mode, or no base video was loaded. Turn on Retake Mode, drop a video "
-                "on the timeline and mark a range."
-            )
+            # Pass through instead of raising. This node sits at the END of the graph, so
+            # raising here throws away a finished render — several minutes of sampling —
+            # for a node that simply had nothing to do. Leaving it wired while you work
+            # normally has to be harmless; it only splices when the Director actually ran
+            # a retake.
+            log.info("[MiniMaxRetake] no retake in this run (the Director was not in Retake "
+                     "Mode, or no base video was marked) — passing the %d frame(s) through "
+                     "unchanged.", int(images.shape[0]))
+            passthrough_audio = audio or {
+                "waveform": _silence(images.shape[0] / MODEL_FPS).unsqueeze(0),
+                "sample_rate": AUDIO_SR,
+            }
+            return io.NodeOutput(images, passthrough_audio, MODEL_FPS)
 
         base = info["base_video"]
         tl_fps = float(info.get("timeline_fps") or 24.0) or 24.0
