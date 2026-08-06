@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.5
+
+- **Picture notes in `Refs ON` use the reference guide's own phrasing**
+  ([#4](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/4)).
+  `VIDEO_PROMPT_WRITING_GUIDE_ref_en.md` gives it verbatim — "the shot begins from
+  `<Picture 1>`", "the shot's keyframe corresponds to `<Picture 2>`", "the shot ends on
+  `<Picture 3>`" — and asks for a standalone `<Picture N>` exactly when an image "serves
+  as a shot's first frame, keyframe, last frame, edited keyframe, or composition anchor".
+  So ref2va does carry frame anchors in its notation; what it does not carry is FL2VA's
+  vocabulary. 0.1.4 dropped the anchors along with the wrong words, which threw away
+  information the guide wants stated:
+
+  ```
+  0.1.3   <Picture 2> is the opening frame.                    FL2VA's words
+  0.1.4   <Picture 2> is the timeline image at 0s (a.png).      no anchor at all
+  0.1.5   [Shot 1] begins from <Picture 2>.                     the ref guide's words
+  ```
+
+  Middle images keep their timestamp: `The keyframe of [Shot 2] corresponds to
+  <Picture 3>, at 6s.` Shots are numbered the way the body numbers them — counting only
+  shots that carry text — and an image whose segment has no text gets shot-free phrasing
+  rather than a number the reader cannot find. Filenames are gone from the notes; the
+  guide has no such notion and the model gains nothing from `b.png`.
+- The phrasing still does not flip on where a segment happens to end, which was the
+  reported bug: an image flush with the window and the same image three frames shorter
+  now differ only in the role the guide would give them anyway.
+- **When a sound box wins over an `Audio:` / `Music:` line, the log says so.** That line
+  may be work the Enhance node's vision model just did, and discarding it in silence was
+  wrong even though the precedence is right.
+
 ## 0.1.4
 
 - **`overall_soundscape` and `non_diegetic_music` have their own boxes** under the Global

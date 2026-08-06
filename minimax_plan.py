@@ -395,7 +395,11 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 continue
             events.append({"seg": seg, "rel_start_f": rel_start, "rel_end_f": rel_end,
                            "is_end": bool(seg.get("isEndFrame")), "kind": kind,
-                           "name": seg.get("fileName", "") or "", "role": ROLE_MIDDLE})
+                           "name": seg.get("fileName", "") or "", "role": ROLE_MIDDLE,
+                           # which shot this image belongs to, so a picture note can name
+                           # it the way the guide does. Resolved to the *written* shot
+                           # numbering below — the body only numbers shots that carry text.
+                           "shot_index": len(shots) - 1})
         classify_events(events, duration_frames, fps)
 
     # --- reference ordinals, in the order the tokenizer will present them ---
@@ -420,22 +424,35 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             ref_image_slots.append({"source": "input"})
 
         # Timeline images in the order they appear on the timeline. `events` is already
-        # chronological, so <Picture n> counts up with time.
+        # chronological, so <Picture n> counts up with time. Character slots and the
+        # ref_images input stay ahead of all of them, so a character's number never shifts
+        # when an image is dropped on the timeline.
         #
-        # Every one of them is described the same way — "the timeline image at 6s" — and
-        # that is deliberate: ref2va has no keyframe slot at all, so calling the first and
-        # last ones "opening frame" / "closing frame" promised the model an anchor this
-        # checkpoint cannot honour. It also made the wording depend on where a segment
-        # happened to end: an image flush with the end of the window read as a closing
-        # frame, the same image three frames shorter read as a timeline image, and the
-        # only way to get the sane wording was to nudge the segment (issue #4).
+        # The wording is the reference guide's own, verbatim where it gives it:
+        # "the shot begins from <Picture 1>", "the shot's keyframe corresponds to
+        # <Picture 2>", "the shot ends on <Picture 3>". `<Picture N>` is precisely what
+        # that guide asks for when an image "serves as a shot's first frame, keyframe,
+        # last frame, edited keyframe, or composition anchor", so ref2va does have frame
+        # anchors in its notation — what it does not have is FL2VA's vocabulary. Calling
+        # these "opening frame" / "closing frame" borrowed from the wrong guide, and made
+        # the phrasing depend on where a segment happened to end: flush with the window it
+        # read as a closing frame, three frames shorter as something else entirely
+        # (issue #4).
         #
-        # The role still lives on the slot. It is not about wording: it decides which
-        # frame of a *video* segment becomes the reference (last frame for ROLE_LAST) and
-        # whether it is fitted to the canvas. See minimax_director.py, ref_image_tensors.
+        # Shots are named the way the body names them, which counts only shots carrying
+        # text. An image whose own segment has no prompt gets the guide's shot-free
+        # phrasing rather than a number the reader cannot find.
         #
-        # Character slots and the ref_images input stay ahead of all of them, so a
-        # character's number never shifts when an image is dropped on the timeline.
+        # The role also lives on the slot, where it is not about wording at all: it picks
+        # which frame of a *video* segment becomes the reference (the last one for
+        # ROLE_LAST) and whether it is fitted to the canvas. See minimax_director.py.
+        written_shot_no = {}
+        counted = 0
+        for shot_i, shot in enumerate(shots):
+            if (shot["prompt"] or "").strip():
+                counted += 1
+                written_shot_no[shot_i] = counted
+
         for ev in events:
             if len(ref_image_slots) >= MAX_REF_IMAGES:
                 break
@@ -443,9 +460,21 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             slot = {"source": "timeline", "event": ev}
             if ev["role"] in (ROLE_FIRST, ROLE_LAST):
                 slot["keyframe"] = ev["role"]
-            ref_notes.append("<Picture %d> is the timeline image at %s%s" % (
-                ordinal, fmt_seconds(ev["rel_start_f"] / fps),
-                " (%s)" % ev["name"] if ev["name"] else ""))
+            shot_no = written_shot_no.get(ev.get("shot_index"))
+            at = fmt_seconds(ev["rel_start_f"] / fps)
+            if ev["role"] == ROLE_FIRST:
+                ref_notes.append("[Shot %d] begins from <Picture %d>" % (shot_no, ordinal)
+                                 if shot_no else
+                                 "The video begins from <Picture %d>" % ordinal)
+            elif ev["role"] == ROLE_LAST:
+                ref_notes.append("[Shot %d] ends on <Picture %d>" % (shot_no, ordinal)
+                                 if shot_no else
+                                 "The video ends on <Picture %d>" % ordinal)
+            else:
+                ref_notes.append(
+                    "The keyframe of [Shot %d] corresponds to <Picture %d>, at %s"
+                    % (shot_no, ordinal, at) if shot_no else
+                    "<Picture %d> is a composition anchor at %s" % (ordinal, at))
             ref_image_slots.append(slot)
     else:
         for slot_idx, slot in enumerate(char_slots):
@@ -532,6 +561,14 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     if prompt_format == FORMAT_MINIMAX:
         # the guide keeps the soundtrack out of the shot description
         global_prompt, found_audio, found_music = split_audio_music(global_prompt)
+        # A filled box wins, but the lifted line is then thrown away — and it may be work
+        # the Enhance node's vision model just did. Say so rather than swallow it.
+        for label, box, found in (("overall_soundscape", soundscape, found_audio),
+                                  ("non_diegetic_music", music, found_music)):
+            if (box or "").strip() and found:
+                log.info("[MiniMaxDirector] %s came from the timeline box, so the %s line "
+                         "in the prompt text was dropped.", label,
+                         "Audio:" if label == "overall_soundscape" else "Music:")
         soundscape = (soundscape or "").strip() or found_audio
         music = (music or "").strip() or found_music
         retention_lines = []

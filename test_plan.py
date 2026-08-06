@@ -100,19 +100,45 @@ check("a third image in the middle stays a middle",
       [plan.ROLE_FIRST, plan.ROLE_MIDDLE, plan.ROLE_LAST])
 
 # ------------------------------------------------- issue #4: ref2va wording
-# ref2va has no keyframe slot, so no timeline image may be announced as an anchor.
+# The reference guide gives the phrasing for concrete frame anchors verbatim: "the shot
+# begins from <Picture 1>", "the shot's keyframe corresponds to <Picture 2>", "the shot
+# ends on <Picture 3>". FL2VA's "opening frame" / "closing frame" belongs to the other
+# guide and must not appear here.
 # Reported case: two 6 s images, the second flush with the end of a 12 s window.
-flush = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")], ref_mode="ON"))
-short = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON"))
+flush = compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                    img(144, 144, "b.png", prompt="she arrives")], ref_mode="ON"))
+short = compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                    img(144, 141, "b.png", prompt="she arrives")], ref_mode="ON"))
 
 check_not_in("ref2va never says 'opening frame'", "opening frame", flush["prompt"])
 check_not_in("ref2va never says 'closing frame'", "closing frame", flush["prompt"])
-check_in("ref2va names the first image by its time",
-         "<Picture 1> is the timeline image at 0s (a.png).", flush["prompt"])
-check_in("ref2va names the last image by its time",
-         "<Picture 2> is the timeline image at 6s (b.png).", flush["prompt"])
-check("nudging a segment off the end no longer changes the wording",
-      flush["prompt"], short["prompt"])
+check_in("the opening image uses the guide's phrasing",
+         "[Shot 1] begins from <Picture 1>.", flush["prompt"])
+check_in("the closing image uses the guide's phrasing",
+         "[Shot 2] ends on <Picture 2>.", flush["prompt"])
+check_in("a middle image is a keyframe, with its time",
+         "The keyframe of [Shot 2] corresponds to <Picture 2>, at 6s.", short["prompt"])
+check("the phrasing no longer flips on where a segment ends",
+      ("begins from <Picture 1>" in flush["prompt"]
+       and "begins from <Picture 1>" in short["prompt"]), True)
+check_not_in("picture notes carry no filenames — the guide has no such notion",
+             "a.png", flush["prompt"])
+
+# an image whose own segment carries no text has no shot number in the body to point at
+noshot = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")], ref_mode="ON"))
+check_in("without a numbered shot the opening image still reads naturally",
+         "The video begins from <Picture 1>.", noshot["prompt"])
+check_in("without a numbered shot the closing image still reads naturally",
+         "The video ends on <Picture 2>.", noshot["prompt"])
+check_not_in("no shot number is invented when the body has none",
+             "[Shot", noshot["prompt"])
+mixed = compile(tl([img(0, 96, "a.png", prompt="she enters"),
+                    img(96, 96, "b.png"),
+                    img(192, 96, "c.png", prompt="she leaves")], ref_mode="ON"))
+check_in("shot numbers follow the body, which counts only shots with text",
+         "[Shot 2] ends on <Picture 3>.", mixed["prompt"])
+check_in("the untexted middle image falls back to a composition anchor",
+         "<Picture 2> is a composition anchor at 4s.", mixed["prompt"])
 # the role itself must survive: it picks which frame of a video segment is taken,
 # and whether it is fitted to the canvas (minimax_director.py, ref_image_tensors)
 check("the closing image keeps its role on the slot",
@@ -150,12 +176,13 @@ check("no keyframe at all yields no instruction", inst(False, False, 1, 5.0), ""
 
 # ---------------------------------------------------------------- reference ordinals
 chars = [{"images": [{"b64": "x", "name": "c.png"}], "description": "a woman in a red coat"}]
-withchar = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")],
+withchar = compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                       img(144, 141, "b.png", prompt="she arrives")],
                       ref_mode="ON", characters=chars))
 check("a character takes <Picture 1> ahead of the timeline",
       withchar["ref_image_slots"][0]["source"], "char")
 check_in("timeline images number after the character",
-         "<Picture 2> is the timeline image at 0s", withchar["prompt"])
+         "[Shot 1] begins from <Picture 2>", withchar["prompt"])
 check_in("the character becomes a named subject",
          "<Subject 1> is the character shown in <Picture 1>.", withchar["prompt"])
 check("ref_images input slots sit between character and timeline",
@@ -244,7 +271,7 @@ check("split_audio_music takes a label only at the start of a line",
 cf = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON",
                 prompt_format="comfyui"))
 check_in("the comfyui format keeps its own reference-notes line",
-         "Reference notes: <Picture 1> is the timeline image at 0s", cf["prompt"])
+         "Reference notes: The video begins from <Picture 1>", cf["prompt"])
 check_not_in("the comfyui format has no minimax sections",
              "subject_definitions:", cf["prompt"])
 check("an unknown format falls back to minimax",

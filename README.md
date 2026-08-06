@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.4-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.5-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -43,12 +43,27 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
-**0.1.4** · 2026-08-06 — the global prompt box gained **two sound fields**,
-`overall_soundscape` and `non_diegetic_music`, so the guide's own sections no longer have
-to be smuggled in as `Audio:` / `Music:` lines. In `Refs ON` a timeline image is now
-always described by the time it sits at, instead of being announced as an opening or
-closing frame that ref2va has no slot for. The alignment line's end mark is floored, so it
-can no longer name a moment past the end of the video.
+**0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
+phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
+`The keyframe of [Shot 2] corresponds to …`.
+
+**0.1.4** · 2026-08-06 — `overall_soundscape` and `non_diegetic_music` have their own boxes
+under the Global Prompt, and the alignment line's end mark can no longer name a moment past
+the end of the video.
+
+**0.1.3** · 2026-08-06 — new **MiniMax H3 Enhance Prompt** node: a local vision model turns
+reference images plus a one-line idea into a prompt for the Director, and hands the same
+images on so it describes exactly what H3 will condition on.
+
+**0.1.2** · 2026-08-06 — reference images are numbered along the timeline again, and prompts
+in `Refs OFF` now carry the image-alignment instruction MiniMax's guide requires. The
+Director Chain node is withdrawn until it can actually be operated.
+
+**0.1.1** · 2026-08-04 — only the checkpoint the toolbar asks for is loaded, instead of both
+model inputs reading ~42 GB of weights to use half of them.
+
+**0.1.0** · 2026-08-04 — first public release: the LTX Director timeline editor by
+WhatDreamsCost, ported to MiniMax H3.
 
 Full history in the [changelog](CHANGELOG.md).
 
