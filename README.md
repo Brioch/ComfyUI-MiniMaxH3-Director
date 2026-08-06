@@ -36,6 +36,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [Longer than 15 seconds](#longer-than-15-seconds)
 - [Troubleshooting](#troubleshooting)
 - [Reporting a bug](#reporting-a-bug)
+- [Contributing](#contributing)
 - [Credits](#credits)
 - [License](#license)
 
@@ -508,6 +509,14 @@ things that make a report fixable:
 
 The issue form asks for exactly these. For anything about dragging, resizing or the
 preview window, add the **browser** console (F12 → Console) too.
+
+## Contributing
+
+Pull requests are welcome, and so are reports from hardware this has never run on — every
+line of it was verified on a single NVIDIA card, so ROCm and Apple silicon are unknown
+territory. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout, the three checks to run
+before submitting, and the handful of rules that exist because breaking them caused a real
+bug.
 
 ## Credits
 

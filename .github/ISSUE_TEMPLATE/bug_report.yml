@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in the Director, the preview, Retake or Chain does not work
+description: Something in the Director, the preview, Retake or Enhance Prompt does not work
 labels: ["bug"]
 body:
   - type: markdown
@@ -58,7 +58,7 @@ body:
         - MiniMax H3 Director
         - MiniMax H3 Preview Override
         - MiniMax H3 Retake Stitch
-        - MiniMax H3 Director Chain
+        - MiniMax H3 Enhance Prompt
         - Not sure
     validations:
       required: true
