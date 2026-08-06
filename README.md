@@ -363,6 +363,10 @@ the finished shot, thinning included.
 vision model and gets back prompt text shaped for H3. The same images come out of its
 `ref_images` output, so what the model described is exactly what H3 conditions on.
 
+<img src="docs/images/enhance-prompt-node.png" alt="The Enhance Prompt node" width="380">
+
+Ready-made graph: `example_workflows/MiniMax H3 Director + Enhance Prompt.json`.
+
 ```
 LoadImage ─→ image0 ┐
 LoadImage ─→ image1 ├→ Enhance Prompt ─┬→ prompt           → Director.global_prompt
