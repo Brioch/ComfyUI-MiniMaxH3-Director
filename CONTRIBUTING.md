@@ -95,10 +95,18 @@ on that text, so it is reproduced as written — including where the guides are 
 inconsistent. If a prompt string looks wrong, check the guide before changing it; that
 sentence is probably a quote.
 
-**The frontend coexists with the upstream LTX Director pack.** Both are ~97 % the same
-JavaScript, so HTTP routes are namespaced `/minimax_director*`, the CSS prefix is `mmxd-`,
-and the `<style>` element has its own id. Two packs sharing a style element means whichever
-loads last wins, which is exactly what used to happen.
+**The frontend coexists with the upstream LTX Director pack.** `js/minimax_director.js` is
+a fork of `ltx_director.js`, and around 93 % of it is still unchanged upstream code, so
+someone can easily have both packs loaded at once. HTTP routes are therefore namespaced
+`/minimax_director*` (duplicate aiohttp routes collide outright), the CSS prefix is
+`mmxd-`, and the `<style>` element has its own id. Two packs sharing one style element
+means whichever loads last overwrites the other, which is exactly what used to happen.
+
+That figure is about the editor file alone, and it is worth being precise about which way
+it cuts: the backend — every `minimax_*.py`, roughly 3,500 lines — is new, and so are the
+preview widget and the title healer. Across the package it is about 70 % inherited editor
+and 30 % written here. Either way it is a derivative work of a GPL-3.0 project, which is
+why the licence is not a choice.
 
 **`toSave` in `js/minimax_director.js` is an allowlist.** Anything you add to the timeline
 state must be listed there *and* in `parseInitial`, or it is silently dropped on the next
