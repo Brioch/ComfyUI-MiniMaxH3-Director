@@ -227,8 +227,8 @@ async def compile_prompt_endpoint(request):
         if p["prompt_is_fallback"]:
             warnings.append("No prompt text on the timeline — 'video' would be sent.")
         if p["length"] > plan.TRAINED_MAX_FRAMES:
-            warnings.append("%.1fs is past H3's trained range (~5-15s); use the Chain node."
-                            % p["actual_seconds"])
+            warnings.append("%.1fs is past H3's trained range (~4-15s). Expect drift or "
+                            "looping — shorten the window." % p["actual_seconds"])
         if not p["ref_mode_on"]:
             middles = sum(1 for e in p["events"] if e["role"] == plan.ROLE_MIDDLE)
             if middles:

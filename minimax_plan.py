@@ -160,9 +160,16 @@ def alignment_instruction(has_first, has_last, shot_count, seconds):
 
     T2VA has no instruction, and the reference guide does not ask for one at all, so this
     only applies to the fl2va path.
+
+    S.SS is the *effective* duration — after snapping to the 17k+5 grid, so a 5s request
+    reports 5.16, not 5.00. It is floored to the hundredth rather than rounded, because
+    rounding can name a mark that is past the end of the video: 124 frames last
+    5.166667s, and "5.17" is outside the clip it is describing. Ten of the twenty-four
+    valid frame counts up to 16s round that way (issue #6). The multiply-round-then-floor
+    keeps binary noise from stealing a hundredth off an exact value like 12.25.
     """
     n = max(1, int(shot_count))
-    s = "%.2f" % max(0.0, float(seconds))
+    s = "%.2f" % (int(round(max(0.0, float(seconds)) * 10000)) // 100 / 100.0)
     if has_first and has_last:
         return ("How the reference pictures align with the target video — Picture 1 "
                 "(from Shot 1) aligns with the 0.00-second mark of the target video; "
@@ -330,6 +337,16 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         global_prompt = tdata.get(
             "retake_global_prompt" if retake else "global_prompt", "") or ""
 
+    # The editor's two soundscape boxes live in the timeline, so both consumers read them
+    # from the same place and no third copy can go stale. Unlike the global prompt these
+    # have no retake twin on purpose: re-rolling part of a shot does not change what the
+    # room sounds like. An explicit argument still wins, which is what lets a caller
+    # override them without touching the timeline.
+    if not (soundscape or "").strip():
+        soundscape = tdata.get("overall_soundscape", "") or ""
+    if not (music or "").strip():
+        music = tdata.get("non_diegetic_music", "") or ""
+
     ref_mode_on = ref_mode_from(tdata)
     if prompt_format is None:
         prompt_format = str(tdata.get("prompt_format", FORMAT_MINIMAX)).lower()
@@ -403,25 +420,32 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             ref_image_slots.append({"source": "input"})
 
         # Timeline images in the order they appear on the timeline. `events` is already
-        # chronological, so <Picture n> counts up with time: opening frame, whatever sits
-        # in between, closing frame. ref2va has no keyframe slot, so the first/last frames
-        # are references here too — they just keep their role in the wording.
+        # chronological, so <Picture n> counts up with time.
+        #
+        # Every one of them is described the same way — "the timeline image at 6s" — and
+        # that is deliberate: ref2va has no keyframe slot at all, so calling the first and
+        # last ones "opening frame" / "closing frame" promised the model an anchor this
+        # checkpoint cannot honour. It also made the wording depend on where a segment
+        # happened to end: an image flush with the end of the window read as a closing
+        # frame, the same image three frames shorter read as a timeline image, and the
+        # only way to get the sane wording was to nudge the segment (issue #4).
+        #
+        # The role still lives on the slot. It is not about wording: it decides which
+        # frame of a *video* segment becomes the reference (last frame for ROLE_LAST) and
+        # whether it is fitted to the canvas. See minimax_director.py, ref_image_tensors.
+        #
         # Character slots and the ref_images input stay ahead of all of them, so a
         # character's number never shifts when an image is dropped on the timeline.
-        keyframe_labels = {ROLE_FIRST: "opening frame", ROLE_LAST: "closing frame"}
         for ev in events:
             if len(ref_image_slots) >= MAX_REF_IMAGES:
                 break
             ordinal = len(ref_image_slots) + 1
             slot = {"source": "timeline", "event": ev}
-            label = keyframe_labels.get(ev["role"])
-            if label:
+            if ev["role"] in (ROLE_FIRST, ROLE_LAST):
                 slot["keyframe"] = ev["role"]
-                ref_notes.append("<Picture %d> is the %s" % (ordinal, label))
-            else:
-                ref_notes.append("<Picture %d> is the timeline image at %s%s" % (
-                    ordinal, fmt_seconds(ev["rel_start_f"] / fps),
-                    " (%s)" % ev["name"] if ev["name"] else ""))
+            ref_notes.append("<Picture %d> is the timeline image at %s%s" % (
+                ordinal, fmt_seconds(ev["rel_start_f"] / fps),
+                " (%s)" % ev["name"] if ev["name"] else ""))
             ref_image_slots.append(slot)
     else:
         for slot_idx, slot in enumerate(char_slots):

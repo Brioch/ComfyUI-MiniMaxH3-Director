@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.3-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.4-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -43,13 +43,12 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
-**0.1.3** · 2026-08-06 — new **MiniMax H3 Enhance Prompt** node: a local vision model
-turns reference images plus a one-line idea into a prompt for the Director, and hands the
-same images on so it describes exactly what H3 will condition on.
-
-**0.1.2** · 2026-08-06 — reference images are numbered along the timeline again, and
-prompts in `Refs OFF` now carry the image-alignment instruction MiniMax's guide requires.
-The Director Chain node is withdrawn until it can actually be operated.
+**0.1.4** · 2026-08-06 — the global prompt box gained **two sound fields**,
+`overall_soundscape` and `non_diegetic_music`, so the guide's own sections no longer have
+to be smuggled in as `Audio:` / `Music:` lines. In `Refs ON` a timeline image is now
+always described by the time it sits at, instead of being announced as an opening or
+closing frame that ref2va has no slot for. The alignment line's end mark is floored, so it
+can no longer name a moment past the end of the video.
 
 Full history in the [changelog](CHANGELOG.md).
 
@@ -284,8 +283,13 @@ non_diegetic_music: soft piano
 The first shot carries no timestamp; every later cut carries a strictly increasing
 `MM:SS.mmm` one. Sections appear only when there is something real to put in them.
 
-`Audio:` / `Sound:` / `SFX:` and `Music:` / `Score:` lines are lifted out of your prompt
-text into `overall_soundscape` and `non_diegetic_music` automatically.
+The two sound sections have their own boxes under the Global Prompt. What you type there
+goes straight into `overall_soundscape` and `non_diegetic_music`. Leave them empty and the
+sections are omitted entirely — an empty heading is worse than none.
+
+`Audio:` / `Sound:` / `SFX:` and `Music:` / `Score:` lines written in the prompt text are
+still lifted into the same two sections, so older workflows and the Enhance node keep
+working. A filled box wins over a lifted line.
 
 **`<Subject N>` vs `<Picture N>`** is worth knowing: the guide reserves `<Subject N>` for
 reusable content — a person, a place, a style — and `<Picture N>` for concrete frame

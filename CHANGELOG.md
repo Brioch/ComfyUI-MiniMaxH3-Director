@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.4
+
+- **`overall_soundscape` and `non_diegetic_music` have their own boxes** under the Global
+  Prompt, which is what both prompting guides ask for
+  ([#7](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/7)). They
+  live in the timeline, so the COMPILED PROMPT panel and the node read one and the same
+  value — node widgets would have meant a third copy to keep in step. Empty boxes emit no
+  section at all. `Audio:` / `Music:` lines in the prompt text are still lifted into the
+  same two sections, so older workflows and the Enhance node are unaffected; a filled box
+  wins over a lifted line. The boxes do not switch with Retake Mode: re-rolling a range
+  does not change what the room sounds like.
+- **`Refs ON` no longer calls a timeline image an opening or closing frame**
+  ([#4](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/4)). ref2va
+  has no keyframe slot, so that wording promised an anchor the checkpoint cannot honour.
+  Worse, it depended on where a segment happened to end: an image flush with the end of
+  the window read as a closing frame, the same image three frames shorter read as a
+  timeline image, and nudging the segment was the only way to get sane wording. Every
+  timeline image is now described by the time it sits at. The role is still tracked
+  internally, where it decides which frame of a *video* segment is used.
+- **The alignment line's end mark is floored to the hundredth, not rounded**
+  ([#6](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/6)). 124
+  frames last 5.166667 s and were reported as `5.17`, a moment past the end of the clip
+  being described. Ten of the twenty-four valid frame counts up to 16 s rounded that way.
+  Prompts for those lengths change by one hundredth, so a fixed seed will not reproduce a
+  0.1.3 render exactly.
+- **A connected `duration` of 0 now fails with a message that names it**, instead of
+  clamping to one timeline frame and rendering five in silence. That is what an upstream
+  node hands over when its own value was never set, and 0.1.3's new `duration_seconds`
+  output is meant to be wired exactly there. `end` before `start` and a negative `start`
+  are refused the same way.
+- The over-length warning no longer points at the Director Chain node, which was withdrawn
+  in 0.1.2, and quotes the trained range as 4-15 s to match the model card.
+- `test_plan.py` ships with the package: 86 offline checks over the planner, no server
+  needed.
+
 ## 0.1.3
 
 - **New node: MiniMax H3 Enhance Prompt.** A local vision model (Ollama / LM Studio / any

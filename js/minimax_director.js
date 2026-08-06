@@ -26,6 +26,13 @@ const MOTION_TRACK_HEIGHT = 80; // used as the Reference Video track height
 const CANVAS_HEIGHT = RULER_HEIGHT + BLOCK_HEIGHT + MOTION_TRACK_HEIGHT + AUDIO_TRACK_HEIGHT;
 const HANDLE_HIT_PX = 14;
 const MIN_SEGMENT_LENGTH = 6;
+// The overall_soundscape / non_diegetic_music strip is docked inside the global prompt
+// box, so the box has to be tall enough for both. MUST match .mmxd-sound-row's height in
+// the stylesheet — the CSS shortens the textarea by exactly this much, and if the two
+// disagree the prompt area either overlaps the strip or leaves a gap.
+const SOUND_ROW_HEIGHT = 54;
+const GLOBAL_PROMPT_MIN_H = 60;                                    // the prompt box alone
+const GLOBAL_PROP_MIN_H = GLOBAL_PROMPT_MIN_H + SOUND_ROW_HEIGHT;  // prompt box + strip
 const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio", "inpaint_audio", "use_custom_motion", "override_audio"];
@@ -677,6 +684,17 @@ const STYLES = `
   .mmxd-ref-option-select { background: #1e1e1e; border-color: #3a3a3a; border-radius: 6px; height: 28px; font-weight: 500; }
   .mmxd-ref-option-select:hover, .mmxd-ref-option-select.mmxd-msel-open { background: #1e1e1e; border-color: #4fff8f; color: #fff; }
   .mmxd-ref-option-select .mmxd-msel-caret { color: #cfcfcf; }
+  /* --- overall_soundscape / non_diegetic_music, docked under the global prompt --- */
+  /* The wrapper positions its children absolutely, so this row sits at the bottom and
+     the prompt area above it is shortened by exactly the same amount. Nothing here
+     changes the node's height: the container keeps whatever the user resized it to. */
+  .mmxd-sound-row { position: absolute; bottom: 0; left: 0; width: 100%; height: 54px; display: flex; gap: 6px; padding: 0 8px 6px 8px; box-sizing: border-box; }
+  .mmxd-prompt-area.mmxd-has-sound { height: calc(100% - 20px - 54px); }
+  .mmxd-sound-field { position: relative; flex: 1 1 0; min-width: 0; background: #1c1c1c; border: 1px solid #111; border-radius: 4px; box-sizing: border-box; }
+  .mmxd-sound-field.focus-active { border-color: #888; }
+  .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
+  .mmxd-sound-area { position: absolute; top: 14px; left: 0; width: 100%; height: calc(100% - 14px); background: transparent; color: #d0d0d0; border: none; padding: 0 6px 4px 6px; resize: none; font-size: 11px; line-height: 1.35; font-family: inherit; box-sizing: border-box; outline: none; }
+  .mmxd-sound-area::placeholder { color: #4a4a4a; }
 `;
 
 let styleEl = document.getElementById("minimax-h3-director-styles");
@@ -803,11 +821,15 @@ function parseInitial(jsonStr) {
     audioSegments: [],
     global_prompt: "",
     retake_global_prompt: "",
+    // The guide's two sound sections. No retake twin on purpose — re-rolling a range
+    // does not change what the room sounds like.
+    overall_soundscape: "",
+    non_diegetic_music: "",
     mainTrackEnabled: true,
     audioTrackEnabled: true,
     motionTrackEnabled: true,
     propHeight: 90,
-    globalPropHeight: 60,
+    globalPropHeight: 114,   // GLOBAL_PROP_MIN_H: prompt box + the sound strip
     showFilenames: true,
     overrideAudio: false,
     inpaint_audio: true,
@@ -835,6 +857,8 @@ function parseInitial(jsonStr) {
       const p = JSON.parse(jsonStr);
       if (p.global_prompt !== undefined) parsed.global_prompt = p.global_prompt;
       if (p.retake_global_prompt !== undefined) parsed.retake_global_prompt = p.retake_global_prompt;
+      if (p.overall_soundscape !== undefined) parsed.overall_soundscape = p.overall_soundscape;
+      if (p.non_diegetic_music !== undefined) parsed.non_diegetic_music = p.non_diegetic_music;
       if (p.mainTrackEnabled !== undefined) parsed.mainTrackEnabled = p.mainTrackEnabled;
       if (p.audioTrackEnabled !== undefined) parsed.audioTrackEnabled = p.audioTrackEnabled;
       if (p.motionTrackEnabled !== undefined) parsed.motionTrackEnabled = p.motionTrackEnabled;
@@ -2932,7 +2956,11 @@ class TimelineEditor {
     if (this.node.properties.globalPropHeight === undefined && this.timeline.globalPropHeight !== undefined) {
       this.node.properties.globalPropHeight = this.timeline.globalPropHeight;
     }
-    if (!this.node.properties.globalPropHeight) this.node.properties.globalPropHeight = 60;
+    if (!this.node.properties.globalPropHeight) this.node.properties.globalPropHeight = GLOBAL_PROP_MIN_H;
+    // Workflows saved before the sound strip existed carry a height sized for the prompt
+    // alone; without this the strip eats it and leaves an 8px sliver to type in.
+    this.node.properties.globalPropHeight =
+      Math.max(this.node.properties.globalPropHeight, GLOBAL_PROP_MIN_H);
     this.globalPropHeight = this.node.properties.globalPropHeight;
 
     const globalPropContainer = document.createElement("div");
@@ -2953,10 +2981,58 @@ class TimelineEditor {
     globalPromptWrapper.appendChild(this.globalPromptLabel);
 
     this.globalPromptInput = document.createElement("textarea");
-    this.globalPromptInput.className = "mmxd-prompt-area";
-    this.globalPromptInput.placeholder = "Enter global prompt here...";
+    this.globalPromptInput.className = "mmxd-prompt-area mmxd-has-sound";
+    this.globalPromptInput.placeholder =
+      "Enter global prompt here...  (Audio: / Music: lines are lifted into the two boxes below)";
     this.globalPromptInput.spellcheck = true;
     globalPromptWrapper.appendChild(this.globalPromptInput);
+
+    // --- overall_soundscape / non_diegetic_music -------------------------------------
+    // The base and ref guides both ask for these as their own sections rather than as
+    // part of the shot description. They live in the timeline JSON and nowhere else, so
+    // the COMPILED PROMPT panel and the node read one and the same value — the guarantee
+    // the whole planner is built around. Adding node widgets for them would mean a third
+    // copy to keep in step. Issue #7.
+    const soundRow = document.createElement("div");
+    soundRow.className = "mmxd-sound-row";
+
+    const makeSoundField = (label, key, placeholder) => {
+      const field = document.createElement("div");
+      field.className = "mmxd-sound-field";
+
+      const cap = document.createElement("div");
+      cap.className = "mmxd-sound-label";
+      cap.textContent = label;
+      field.appendChild(cap);
+
+      const area = document.createElement("textarea");
+      area.className = "mmxd-sound-area";
+      area.placeholder = placeholder;
+      area.spellcheck = true;
+      area.value = this.timeline?.[key] || "";
+      field.appendChild(area);
+
+      area.addEventListener("focus", () => {
+        field.classList.add("focus-active");
+        this.wrapper.classList.add("has-focus");
+      });
+      area.addEventListener("blur", () => {
+        field.classList.remove("focus-active");
+        this.wrapper.classList.remove("has-focus");
+        if (saveTimeout) clearTimeout(saveTimeout);
+        triggerAutoSave();
+      });
+      area.addEventListener("input", (e) => {
+        this.timeline[key] = e.target.value;
+        this.commitChanges(true);
+        if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+        if (saveTimeout) clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(triggerAutoSave, 300);
+      });
+
+      soundRow.appendChild(field);
+      return area;
+    };
 
     this.globalPromptInput.addEventListener("focus", () => {
       globalPromptWrapper.classList.add("focus-active");
@@ -2977,6 +3053,16 @@ class TimelineEditor {
         if (app.canvas && app.canvas.captureCanvasState) app.canvas.captureCanvasState();
       } catch (_) { }
     };
+
+    // built here rather than above, so the two fields share the global prompt's autosave
+    // debounce instead of declaring a second one
+    this.soundscapeInput = makeSoundField(
+      "overall_soundscape", "overall_soundscape",
+      "Ambience and physical sound across the whole video. Dialogue and shot-synced effects belong in the prompt above.");
+    this.musicInput = makeSoundField(
+      "non_diegetic_music", "non_diegetic_music",
+      "Score only the audience hears. Name instrumentation, tempo and dynamics, or write N/A.");
+    globalPromptWrapper.appendChild(soundRow);
 
     this.globalPromptInput.addEventListener("input", (e) => {
       const val = e.target.value;
@@ -3026,7 +3112,7 @@ class TimelineEditor {
 
     document.addEventListener("mousemove", (ev) => {
       if (isGlobalResizing) {
-        const newH = Math.max(60, startGlobalH + (ev.clientY - startGlobalY));
+        const newH = Math.max(GLOBAL_PROP_MIN_H, startGlobalH + (ev.clientY - startGlobalY));
         this.globalPropHeight = newH;
         this.node.properties.globalPropHeight = newH;
         globalPropContainer.style.height = `${newH}px`;
@@ -5790,6 +5876,18 @@ class TimelineEditor {
         this.globalPromptInput.value = p;
         this.syncGlobalPrompt(p);
       }
+    }
+
+    // The sound sections do not switch with retake mode — one value for the whole
+    // timeline — but they still have to come back when a workspace is loaded, and this
+    // is the hook that runs for that.
+    if (this.soundscapeInput) {
+      const s = this.timeline.overall_soundscape || "";
+      if (this.soundscapeInput.value !== s) this.soundscapeInput.value = s;
+    }
+    if (this.musicInput) {
+      const m = this.timeline.non_diegetic_music || "";
+      if (this.musicInput.value !== m) this.musicInput.value = m;
     }
 
     // 1. Set track heights
@@ -9610,6 +9708,9 @@ class TimelineEditor {
       inpaint_audio: !!(this.node.widgets?.find(w => w.name === "inpaint_audio")?.value),
       global_prompt: this.retakeMode ? (this.timeline.global_prompt || "") : (this.globalPromptInput ? this.globalPromptInput.value : ""),
       retake_global_prompt: this.retakeMode ? (this.globalPromptInput ? this.globalPromptInput.value : "") : (this.timeline.retake_global_prompt || ""),
+      // this object is an allowlist: a key missing here is dropped on the next commit
+      overall_soundscape: this.soundscapeInput ? this.soundscapeInput.value : (this.timeline.overall_soundscape || ""),
+      non_diegetic_music: this.musicInput ? this.musicInput.value : (this.timeline.non_diegetic_music || ""),
       retakeMode: this.retakeMode,
       retakeStart: this.timeline.retakeStart,
       retakeLength: this.timeline.retakeLength,
@@ -11005,8 +11106,9 @@ class TimelineEditor {
         }
       }
       if (this.timeline.globalPropHeight !== undefined) {
-        this.node.properties.globalPropHeight = this.timeline.globalPropHeight;
-        this.globalPropHeight = this.timeline.globalPropHeight;
+        const h = Math.max(this.timeline.globalPropHeight, GLOBAL_PROP_MIN_H);
+        this.node.properties.globalPropHeight = h;
+        this.globalPropHeight = h;
         if (this.globalPropContainer) {
           this.globalPropContainer.style.height = `${this.globalPropHeight}px`;
         }

@@ -110,14 +110,37 @@ def resolve_canvas(mm, custom_width, custom_height, divisible_by, resize_method,
 
 def resolve_window(tdata, fps, start_frame, duration_frames,
                    start=None, end=None, duration=None):
-    """Resolve the render window, honouring automation inputs and retake mode."""
+    """Resolve the render window, honouring automation inputs and retake mode.
+
+    The automation sockets are the only route by which a nonsensical window reaches this
+    node: the widgets carry minimums, a connected input carries none. A `duration` of 0 —
+    what an upstream node hands over when its own value was never set — used to clamp to
+    one timeline frame and then render five, a fifth of a second, without a word. Refuse
+    it by name instead. Whatever breaks downstream on a window that short breaks a long
+    way from the wire that caused it, which is the expensive kind of bug to report.
+    """
     if start is not None:
+        if float(start) < 0:
+            raise ValueError(
+                "MiniMax H3 Director: the connected 'start' is %.3gs. It is a position in "
+                "seconds and cannot be negative." % float(start))
         start_frame = int(round(float(start) * fps))
     if end is not None:
         end_frame = int(round(float(end) * fps))
         if duration is None:
-            duration_frames = max(1, end_frame - start_frame)
+            if end_frame <= start_frame:
+                raise ValueError(
+                    "MiniMax H3 Director: the connected 'end' (%.3gs) is not after the "
+                    "window start (%.3gs), so there is nothing to render. Both are in "
+                    "seconds." % (float(end), start_frame / fps))
+            duration_frames = end_frame - start_frame
     if duration is not None:
+        if float(duration) <= 0:
+            raise ValueError(
+                "MiniMax H3 Director: the connected 'duration' is %.3gs, so there is "
+                "nothing to render. It is a length in seconds — H3's trained range is "
+                "4-15s. Check the node feeding it; a value that was never set arrives "
+                "here as 0." % float(duration))
         duration_frames = max(1, int(round(float(duration) * fps)))
 
     retake = plan.retake_state(tdata)
@@ -368,9 +391,9 @@ class MiniMaxH3Director(io.ComfyNode):
         length = p["length"]
         if length > plan.TRAINED_MAX_FRAMES:
             log.warning("[MiniMaxDirector] %d frames (%.1fs) is past H3's trained range of "
-                        "~%d-%d frames (~5-15s). Expect drift, looping or a VRAM wall — "
-                        "shorten the timeline, or use MiniMax H3 Director Chain to render "
-                        "it as several anchored windows.",
+                        "~%d-%d frames (~4-15s). Expect drift, looping or a VRAM wall — "
+                        "shorten the timeline, or render it as several windows and splice "
+                        "them together.",
                         length, p["actual_seconds"], plan.TRAINED_MIN_FRAMES,
                         plan.TRAINED_MAX_FRAMES)
         elif length < plan.TRAINED_MIN_FRAMES:
