@@ -512,16 +512,30 @@ check_in("a speaker ID in a retention note is reported",
                           )["ref_warnings"]))
 check("a clean timeline reports no speaker-ID warning",
       any("(Sx)" in w for w in talk["ref_warnings"]), False)
+# The word count is a figure in the preview badge, not a warning. The guide's 350-500 is a
+# lot for a 5-15s clip, so being under it is the ordinary state here — warning about it
+# fired on essentially every timeline, which is how a warnings area stops being read.
 long_shots = [img(i * 20, 20, "%d.png" % i, prompt=" ".join(["word"] * 200))
               for i in range(3)]
-check_in("an over-long description is reported",
+check_in("only overshooting the range is warned about",
          "the guide suggests 350-500",
          " ".join(compile(tl(long_shots, ref_mode="ON"), duration_f=240)["ref_warnings"]))
-check("a two-shot test is not nagged for being short",
-      any("guide suggests" in w for w in
-          compile(tl([img(0, 120, "a.png", prompt="she enters"),
-                      img(120, 120, "b.png", prompt="she leaves")], ref_mode="ON"),
-                  duration_f=240)["ref_warnings"]), False)
+ordinary = compile(tl([img(i * 96, 96, "%d.png" % i, prompt="she walks past the stalls")
+                       for i in range(3)], ref_mode="ON"), duration_f=288)
+check("an ordinary short timeline is not nagged",
+      any("guide suggests" in w for w in ordinary["ref_warnings"]), False)
+check("...but its word count is still reported", ordinary["description_words"], 21)
+check("the count covers the global prompt, shot text and dialogue",
+      compile(tl([img(0, 240, "a.png", prompt="she waits\n@ref1 says: hello there")],
+                 ref_mode="ON", global_prompt="one two three",
+                 subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                            "description": "a woman"}]),
+              duration_f=240)["description_words"],
+      # "one two three" + "she waits" + "<Subject 1> (S1) says, <d>[English] hello there</d>"
+      3 + 2 + 7)
+check("the comfyui format reports no count rather than failing",
+      compile(tl([img(0, 240, "a.png", prompt="she waits")], ref_mode="ON",
+                 prompt_format="comfyui"), duration_f=240)["description_words"], 0)
 
 # ------------------------------------------------- Analyze output parsing
 check("split_analysis reads both labelled lines",

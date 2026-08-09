@@ -135,10 +135,12 @@ than that, and two of its sections were structurally missing from the output.
   alone would have dropped it once the dialogue was lifted out, losing the line and
   shifting every later shot number, including the ones picture notes point at.
 
-- **Two more checks against the guide, reported in the live preview**: a speaker ID written
-  into a retention note, and a `detailed_description` outside the guide's 350–500 words.
-  The short-side warning waits for a third shot, since the guide warns against "mechanical
-  word-count adherence" and nagging a two-shot test would be noise.
+- **The live preview reports a speaker ID written into a retention note**, which the guide
+  forbids outright, and **shows `detailed_description`'s word count in its badge** against
+  the guide's suggested 350–500 for generation tasks. The count is a figure rather than a
+  warning: 350 words is a lot for a 5–15 second clip, so sitting under it is the ordinary
+  state here, and warning about it fired on essentially every timeline — which is how a
+  warnings area stops being read at all. Only overshooting the range is called out.
 
 - **The chain node and the Director now share one reference loader.** The chain had grown
   its own copy that ignored the `ref_images` socket entirely and never fitted a keyframe to

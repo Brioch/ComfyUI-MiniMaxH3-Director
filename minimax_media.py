@@ -254,6 +254,9 @@ async def compile_prompt_endpoint(request):
             "shots": len(p["shots"]),
             "length": p["length"],
             "seconds": round(p["actual_seconds"], 2),
+            # shown in the badge rather than warned about: the guide's 350-500 is a lot of
+            # words for a 5-15s clip, so being under it is the ordinary state here
+            "words": p.get("description_words") or 0,
             "refs": {"images": len(p["ref_image_slots"]),
                      "videos": len(p["ref_video_segs"]),
                      "audios": len(p["ref_audio_segs"])},

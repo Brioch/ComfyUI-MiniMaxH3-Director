@@ -209,8 +209,13 @@ Other quantisations on the repo work too: `*_bf16` (66 GB, best quality),
 5. **Run.**
 
 Read the **COMPILED PROMPT** panel under the timeline before running: it shows the exact
-text the model will get, the shot count, the frame count and the reference tally, plus
-warnings for the things that silently bite.
+text the model will get, the shot count, the frame count, the reference tally and the
+`detailed_description` word count, plus warnings for the things that silently bite.
+
+The word count is there because the guide suggests **350–500 words** for generation tasks,
+which is more than most people write. It is a figure, not a verdict — being under it is
+perfectly normal for a short clip, and the guide itself warns against "mechanical
+word-count adherence". Only going *past* 500 raises a warning.
 
 Defaults that matter, if you wire it yourself:
 

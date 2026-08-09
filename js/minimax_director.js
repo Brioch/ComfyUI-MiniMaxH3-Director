@@ -13495,8 +13495,17 @@ app.registerExtension({
             const d = await resp.json();
             if (d.status !== "success") throw new Error(d.message || "compile failed");
             pText.textContent = d.prompt || "";
+            // The word count is information, not a verdict: the guide suggests 350-500 for
+            // generation tasks, which is a lot for a 5-15s clip, so it sits in the badge
+            // where it can be glanced at rather than in the warnings where it would fire
+            // on almost every timeline.
             pBadge.textContent = `${d.mode} · ${d.format || ""} · ${d.shots} shot${d.shots === 1 ? "" : "s"} · `
-              + `${d.length}f / ${d.seconds}s · refs ${d.refs.images}i/${d.refs.videos}v/${d.refs.audios}a`;
+              + `${d.length}f / ${d.seconds}s · refs ${d.refs.images}i/${d.refs.videos}v/${d.refs.audios}a`
+              + (d.words ? ` · ${d.words} words` : "");
+            pBadge.title = d.words
+              ? `detailed_description is about ${d.words} words. The guide suggests 350-500 `
+                + `for generation tasks; editing descriptions scale with the source instead.`
+              : "";
             pWarn.textContent = (d.warnings || []).join("  •  ");
             pWarn.style.display = (!pCollapsed && pWarn.textContent) ? "block" : "none";
           } catch (e) {

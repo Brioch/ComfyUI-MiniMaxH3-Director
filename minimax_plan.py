@@ -681,12 +681,11 @@ DIALOGUE_DEFAULT_DELIVERY = "says"
 
 SPEAKER_ID_RE = re.compile(r"\(S\d+\)")
 
-# "Generation tasks typically span 350-500 words". The floor is only worth mentioning once
-# a timeline is a real storyboard — firing it on a two-shot test would be noise, and the
-# guide itself warns against "mechanical word-count adherence".
+# "Generation tasks typically span 350-500 words", which the preview reports as a figure so
+# the range is visible without being nagged about. The guide itself warns against
+# "mechanical word-count adherence".
 DESCRIPTION_MIN_WORDS = 350
 DESCRIPTION_MAX_WORDS = 500
-DESCRIPTION_MIN_SHOTS = 3
 
 
 def split_dialogue(text):
@@ -1136,6 +1135,10 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # appears in the shots where it speaks.
     speaker_ids = assign_speakers(shots, lambda slot: char_tag_values.get(slot))
 
+    # only the minimax format has a detailed_description to measure; the key exists either
+    # way so every caller can read it without checking the format first
+    description_words = 0
+
     if prompt_format == FORMAT_MINIMAX:
         # the guide keeps the soundtrack out of the shot description
         global_prompt, found_audio, found_music = split_audio_music(global_prompt)
@@ -1202,22 +1205,22 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                                             subject_lines, retention_lines, instruction,
                                             summary_line)
 
-        # Length guidance, measured on detailed_description alone — the label blocks and
-        # the sound sections are not what the guide is counting.
-        written_shots = [s for s in shots if shot_has_text(s)]
-        words = len(global_prompt.split()) + sum(
+        # Measured on detailed_description alone — the label blocks and the sound sections
+        # are not what the guide is counting.
+        #
+        # Reported as a figure, not a warning. The guide's 350-500 is a lot of words for a
+        # 5-15 second clip, so being under it is the ordinary state here rather than a
+        # fault: warning about it fired on essentially every timeline, which is how a
+        # warning area stops being read at all. Only overshooting the range is called out,
+        # where the prompt really has outgrown what the guide describes.
+        description_words = len(global_prompt.split()) + sum(
             len(("%s %s" % (s["prompt"] or "", s.get("dialogue_text") or "")).split())
-            for s in written_shots)
-        if words > DESCRIPTION_MAX_WORDS:
+            for s in shots if shot_has_text(s))
+        if description_words > DESCRIPTION_MAX_WORDS:
             ref_warnings.append(
                 "detailed_description is about %d words; the guide suggests %d-%d for "
-                "generation tasks." % (words, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
-        elif words and words < DESCRIPTION_MIN_WORDS \
-                and len(written_shots) >= DESCRIPTION_MIN_SHOTS:
-            ref_warnings.append(
-                "detailed_description is about %d words across %d shots; the guide suggests "
-                "%d-%d for generation tasks."
-                % (words, len(written_shots), DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
+                "generation tasks."
+                % (description_words, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
     else:
         prompt = compile_storyboard(global_prompt, shots, window_seconds)
         if ref_notes:
@@ -1241,6 +1244,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         "ref_image_slots": ref_image_slots, "ref_notes": ref_notes,
         "ref_video_segs": ref_video_segs, "ref_audio_segs": ref_audio_segs,
         "ref_warnings": ref_warnings, "prompt_format": prompt_format,
+        "description_words": description_words,
         "char_tag_values": char_tag_values,
         "win_start": win_start, "duration_frames": duration_frames, "fps": fps,
         "window_seconds": window_seconds,
