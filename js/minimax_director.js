@@ -4932,145 +4932,200 @@ class TimelineEditor {
 
     for (let file of files) {
       if (!(file.type.startsWith("video/") || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/))) continue;
+      const placed = await this._loadMotionFile(file, frameRate, targetFrameStart);
+      if (placed && targetFrameStart !== null) targetFrameStart = placed.nextStart;
+    }
+  }
 
-      await new Promise(async (resolve) => {
-        try {
-          // Load from local blob immediately — no waiting for server upload
-          const blobUrl = URL.createObjectURL(file);
+  // Positioning, segment creation and insertion — shared by the two ways a reference video
+  // can arrive: decoded by the browser, or described by the server when the browser will
+  // not touch it. One copy on purpose; the paths differ only in where the duration and the
+  // thumbnail came from.
+  _insertMotionSegment({ file, clipFrames, thumbB64, videoEl, blobUrl, videoFile,
+                         targetFrameStart }) {
+    const newLength = clipFrames;
+    let newStart = targetFrameStart;
 
-          const vid = document.createElement('video');
-          vid.crossOrigin = "Anonymous";
-          vid.preload = 'auto';
-          vid.muted = true;
-          vid.onerror = (e) => { console.error("Motion video load error", e); URL.revokeObjectURL(blobUrl); resolve(); };
+    if (newStart === null || newStart === undefined) {
+      newStart = 0;
+      this.timeline.motionSegments.sort((a, b) => a.start - b.start);
+      for (let i = 0; i < this.timeline.motionSegments.length; i++) {
+        const s = this.timeline.motionSegments[i];
+        if (newStart + newLength <= s.start) break;
+        newStart = Math.max(newStart, s.start + s.length);
+      }
+    } else {
+      const currentDuration = this.getVisualDurationFrames();
+      const tempId = "TEMP_" + Date.now();
+      this.timeline.motionSegments.push({ id: tempId, start: newStart, length: newLength, type: "temp" });
+      const result = this._applyCenterDragPhysics(this.timeline.motionSegments, tempId, newStart, newStart + newLength / 2, currentDuration, currentDuration, 1);
+      for (const shiftedSeg of result) {
+        const original = this.timeline.motionSegments.find(s => s.id === shiftedSeg.id);
+        if (original) original.start = shiftedSeg.resolvedStart !== undefined ? shiftedSeg.resolvedStart : shiftedSeg.start;
+      }
+      const tempSeg = this.timeline.motionSegments.find(s => s.id === tempId);
+      newStart = tempSeg.start;
+      this.timeline.motionSegments = this.timeline.motionSegments.filter(s => s.id !== tempId);
+    }
 
-          vid.onloadeddata = () => {
-            vid.onloadeddata = null; // prevent re-firing if src changes or browser buffers more data
-            const clipDurationSecs = vid.duration || 1;
-            const clipFrames = Math.max(1, Math.ceil(clipDurationSecs * frameRate));
-            let newLength = clipFrames;
-            let newStart = targetFrameStart;
+    const seg = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+      type: "motion_video",
+      start: newStart,
+      length: newLength,
+      trimStart: 0,
+      videoDurationFrames: clipFrames,
+      videoFile: videoFile || "",   // filled in later when the upload runs in background
+      fileName: file.name,
+      videoStrength: 1.0,
+      videoAttentionStrength: 0.65,
+      resampleMode: "nearest",
+      previewThumbs: [],
+      previewThumbSourceFrames: clipFrames,
+      fileSize: file.size
+    };
+    if (videoEl) seg.videoEl = videoEl;
+    if (blobUrl) seg._blobUrl = blobUrl;
+    if (!videoFile) seg._uploading = true;
 
-            if (newStart === null) {
-              newStart = 0;
-              this.timeline.motionSegments.sort((a, b) => a.start - b.start);
-              for (let i = 0; i < this.timeline.motionSegments.length; i++) {
-                let s = this.timeline.motionSegments[i];
-                if (newStart + newLength <= s.start) break;
-                newStart = Math.max(newStart, s.start + s.length);
-              }
-            }
+    if (thumbB64) {
+      seg.imageB64 = thumbB64;
+      const imgObj = new Image();
+      imgObj.onload = () => { seg.imgObj = imgObj; this.render(); };
+      imgObj.src = thumbB64;
+    }
 
-            const currentDuration = this.getVisualDurationFrames();
-            if (targetFrameStart !== null) {
-              let tempId = "TEMP_" + Date.now();
-              this.timeline.motionSegments.push({ id: tempId, start: newStart, length: newLength, type: "temp" });
-              let result = this._applyCenterDragPhysics(this.timeline.motionSegments, tempId, newStart, newStart + newLength / 2, currentDuration, currentDuration, 1);
-              for (let shiftedSeg of result) {
-                let original = this.timeline.motionSegments.find(s => s.id === shiftedSeg.id);
-                if (original) original.start = shiftedSeg.resolvedStart !== undefined ? shiftedSeg.resolvedStart : shiftedSeg.start;
-              }
-              let tempSeg = this.timeline.motionSegments.find(s => s.id === tempId);
-              newStart = tempSeg.start;
-              this.timeline.motionSegments = this.timeline.motionSegments.filter(s => s.id !== tempId);
-              targetFrameStart = newStart + newLength;
-            }
+    this.timeline.motionSegments.push(seg);
+    this.timeline.motionSegments.sort((a, b) => a.start - b.start);
 
-            const seg = {
-              id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-              type: "motion_video",
-              start: newStart,
-              length: newLength,
-              trimStart: 0,
-              videoDurationFrames: clipFrames,
-              videoFile: "",  // filled in once background upload completes
-              fileName: file.name,
-              videoStrength: 1.0,
-              videoAttentionStrength: 0.65,
-              resampleMode: "nearest",
-              previewThumbs: [],
-              previewThumbSourceFrames: clipFrames,
-              videoEl: vid,
-              _uploading: true,
-              _blobUrl: blobUrl,
-              fileSize: file.size
-            };
+    if (!this.retakeMode) {
+      this.growTimelineIfNeeded(seg.start + seg.length);
+    }
 
-            vid.currentTime = 0.01;
-            vid.onseeked = () => {
-              vid.onseeked = null;
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.min(vid.videoWidth, 512);
-              canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
-              seg.imageB64 = canvas.toDataURL('image/jpeg');
+    this.selectionType = "motion";
+    this.selectedIndex = this.timeline.motionSegments.findIndex(s => s.id === seg.id);
+    this.updateUIFromSelection();
+    this.commitChanges(true);
+    this.render();
+    return { seg, nextStart: newStart + newLength };
+  }
 
-              const imgObj = new Image();
-              imgObj.onload = () => { seg.imgObj = imgObj; this.render(); };
-              imgObj.src = seg.imageB64;
-
-              // Add to timeline immediately
-              this.timeline.motionSegments.push(seg);
-              this.timeline.motionSegments.sort((a, b) => a.start - b.start);
-
-              if (!this.retakeMode) {
-                this.growTimelineIfNeeded(seg.start + seg.length);
-              }
-
-              this.selectionType = "motion";
-              this.selectedIndex = this.timeline.motionSegments.findIndex(s => s.id === seg.id);
-              this.updateUIFromSelection();
-              this.commitChanges(true);
-              resolve(); // resolve immediately — don't block on upload
-              this._ensureThumbnails(seg);
-
-              // Background upload — runs while the user can already work.
-              // We intentionally do NOT change vid.src after upload — the blob URL
-              // works perfectly for local playback. Only videoFile needs updating
-              // so Python can find the file at generation time.
-              this._uploadVideoFile(file).then(filePath => {
-                for (let s of this.timeline.motionSegments) {
-                  if (s._blobUrl === blobUrl || s.id === seg.id) {
-                    s.videoFile = filePath;
-                    s._uploading = false;
-                  }
-                }
-                if (blobUrl && filePath) {
-                  this._thumbnailCache = this._thumbnailCache || new Map();
-                  this._thumbnailPromises = this._thumbnailPromises || new Map();
-                  if (this._thumbnailCache.has(blobUrl)) {
-                    this._thumbnailCache.set(filePath, this._thumbnailCache.get(blobUrl));
-                  }
-                  if (this._thumbnailPromises.has(blobUrl)) {
-                    this._thumbnailPromises.set(filePath, this._thumbnailPromises.get(blobUrl));
-                  }
-                }
-                const isOverrideAudio = !!(this.node.properties.overrideAudio || this.timeline.overrideAudio);
-                if (isOverrideAudio) {
-                  const s = this.timeline.motionSegments.find(s => s.id === seg.id);
-                  if (s) {
-                    this._preloadMotionAudioSegment(s);
-                  }
-                }
-                this.commitChanges(true);
-                this.render();
-              }).catch(err => {
-                console.error("[MiniMaxDirector] Background motion video upload failed", err);
-                const currentSeg = this.timeline.motionSegments.find(s => s.id === seg.id);
-                if (currentSeg) currentSeg._uploading = false;
-                this.render();
-              });
-            };
-          };
-
-          vid.src = blobUrl;
-
-        } catch (err) {
-          console.error("[MiniMaxDirector] Motion video processing failed", err);
-          resolve();
+  // Upload in the background so the clip is usable the moment it lands on the track.
+  _finishMotionUpload(seg, file, blobUrl) {
+    this._uploadVideoFile(file).then(filePath => {
+      for (const s of this.timeline.motionSegments) {
+        if (s._blobUrl === blobUrl || s.id === seg.id) {
+          s.videoFile = filePath;
+          s._uploading = false;
         }
+      }
+      if (blobUrl && filePath) {
+        this._thumbnailCache = this._thumbnailCache || new Map();
+        this._thumbnailPromises = this._thumbnailPromises || new Map();
+        if (this._thumbnailCache.has(blobUrl)) {
+          this._thumbnailCache.set(filePath, this._thumbnailCache.get(blobUrl));
+        }
+        if (this._thumbnailPromises.has(blobUrl)) {
+          this._thumbnailPromises.set(filePath, this._thumbnailPromises.get(blobUrl));
+        }
+      }
+      const isOverrideAudio = !!(this.node.properties.overrideAudio || this.timeline.overrideAudio);
+      if (isOverrideAudio) {
+        const s = this.timeline.motionSegments.find(s => s.id === seg.id);
+        if (s) this._preloadMotionAudioSegment(s);
+      }
+      this.commitChanges(true);
+      this.render();
+    }).catch(err => {
+      console.error("[MiniMaxDirector] Background motion video upload failed", err);
+      const currentSeg = this.timeline.motionSegments.find(s => s.id === seg.id);
+      if (currentSeg) currentSeg._uploading = false;
+      this.render();
+    });
+  }
+
+  // Try the browser first — a local blob shows the clip instantly, with no upload to wait
+  // on. If the browser will not decode it, fall back to the server rather than giving up.
+  _loadMotionFile(file, frameRate, targetFrameStart) {
+    return new Promise((resolve) => {
+      const blobUrl = URL.createObjectURL(file);
+      const vid = document.createElement('video');
+      vid.crossOrigin = "Anonymous";
+      vid.preload = 'auto';
+      vid.muted = true;
+
+      let settled = false;
+      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+
+      vid.onerror = () => {
+        // Chrome refuses plenty of codecs the renderer reads without complaint — HEVC,
+        // ProRes and 10-bit footage all live inside perfectly ordinary .mp4 and .mov
+        // files. This used to log to the console and stop, so picking such a file did
+        // nothing at all and never said why.
+        URL.revokeObjectURL(blobUrl);
+        this._placeMotionViaServer(file, frameRate, targetFrameStart).then(done);
+      };
+
+      vid.onloadeddata = () => {
+        vid.onloadeddata = null;   // browsers re-fire this as more data buffers
+        const clipFrames = Math.max(1, Math.ceil((vid.duration || 1) * frameRate));
+
+        vid.currentTime = 0.01;
+        vid.onseeked = () => {
+          vid.onseeked = null;
+          let thumb = "";
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(vid.videoWidth, 512);
+            canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
+            canvas.getContext('2d').drawImage(vid, 0, 0, canvas.width, canvas.height);
+            thumb = canvas.toDataURL('image/jpeg');
+          } catch (e) {
+            console.warn("[MiniMaxDirector] could not grab a thumbnail frame", e);
+          }
+
+          const { seg, nextStart } = this._insertMotionSegment({
+            file, clipFrames, thumbB64: thumb, videoEl: vid, blobUrl, targetFrameStart });
+          done({ nextStart });               // never block on the upload
+          this._ensureThumbnails(seg);
+          this._finishMotionUpload(seg, file, blobUrl);
+        };
+      };
+
+      vid.src = blobUrl;
+    });
+  }
+
+  // The file has to be uploaded before it can be probed, so this path is slower than the
+  // blob one — but it accepts everything the renderer accepts, which is the point.
+  async _placeMotionViaServer(file, frameRate, targetFrameStart) {
+    try {
+      const videoFile = await this._uploadVideoFile(file);
+      if (!videoFile) throw new Error("the upload did not complete");
+
+      const resp = await api.fetchApi("/minimax_director/probe_video", {
+        method: "POST", body: JSON.stringify({ file: videoFile }),
       });
+      const d = await resp.json();
+      if (d.status !== "success") throw new Error(d.message || "the server could not read it");
+      if (!d.duration) throw new Error("the file reports no duration");
+
+      const clipFrames = Math.max(1, Math.ceil(d.duration * frameRate));
+      const { seg, nextStart } = this._insertMotionSegment({
+        file, clipFrames, thumbB64: d.thumb || "", videoFile, targetFrameStart });
+      console.info(`[MiniMaxDirector] '${file.name}' (${d.codec || "unknown codec"}) could `
+        + `not be decoded by the browser; the server read it instead.`);
+      // deliberately no _ensureThumbnails here: the filmstrip is extracted through a
+      // <video> element too, so it would fail the same way. The frame the server sent is
+      // already on the segment.
+      return { nextStart };
+    } catch (err) {
+      console.error("[MiniMaxDirector] reference video could not be read", err);
+      alert(`Could not add "${file.name}".\n\n`
+        + `${err.message || err}\n\n`
+        + `The browser cannot decode this file and the server could not read it either. `
+        + `Re-encoding to H.264 in an MP4 container usually fixes it.`);
+      return null;
     }
   }
 

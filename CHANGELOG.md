@@ -142,6 +142,19 @@ than that, and two of its sections were structurally missing from the output.
   state here, and warning about it fired on essentially every timeline — which is how a
   warnings area stops being read at all. Only overshooting the range is called out.
 
+- **A reference video the browser cannot decode now works anyway.** The editor built the
+  clip from a local blob through a `<video>` element, so it only accepted what the browser
+  accepts — and a browser accepts far less than the renderer does. HEVC, ProRes and 10-bit
+  footage inside perfectly ordinary `.mp4` and `.mov` files are all refused by Chrome and
+  all read fine by PyAV, which is what loads reference videos at generation time anyway.
+  Picking one did nothing at all, with a single `Motion video load error` in the console
+  and no message on screen.
+
+  A `probe_video` endpoint now supplies the duration, size and a first frame when the
+  browser gives up, so the clip lands on the track and renders normally. The editor accepts
+  what the renderer accepts. If the server cannot read it either, that finally says so on
+  screen instead of failing in silence.
+
 - **The chain node and the Director now share one reference loader.** The chain had grown
   its own copy that ignored the `ref_images` socket entirely and never fitted a keyframe to
   the canvas, so a chained render silently dropped references the Director would have sent.

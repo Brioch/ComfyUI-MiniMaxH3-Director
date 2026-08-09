@@ -267,6 +267,75 @@ async def compile_prompt_endpoint(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
+@PromptServer.instance.routes.post("/minimax_director/probe_video")
+async def probe_video_endpoint(request):
+    """Duration, size and a first frame for a video the browser could not open.
+
+    The editor builds a reference-video segment from a local blob: it needs the duration
+    to size the clip on the timeline and a frame for the thumbnail. That path goes through
+    a <video> element, so it only works for what the browser can decode — and a browser
+    decodes far less than the renderer does. HEVC, ProRes and 10-bit footage inside a
+    perfectly ordinary .mp4 or .mov are all refused by Chrome and all read fine here,
+    because PyAV is what loads reference videos at generation time anyway.
+
+    Without this the editor silently rejected files it would have rendered without
+    complaint. The codec is reported back so a failure can at least name itself.
+    """
+    try:
+        data = await request.json()
+        path = resolve_input_path(data.get("file") or "")
+        if not path:
+            return web.json_response({"status": "error",
+                                      "message": "File not found on the server."})
+
+        with av.open(path) as container:
+            if not container.streams.video:
+                return web.json_response({"status": "error",
+                                          "message": "No video stream in that file."})
+            stream = container.streams.video[0]
+            codec = getattr(stream.codec_context, "name", "") or ""
+            width = stream.width or stream.codec_context.width or 0
+            height = stream.height or stream.codec_context.height or 0
+
+            # Container duration first — a stream's own is missing often enough to matter.
+            duration = 0.0
+            if container.duration:
+                duration = float(container.duration) / av.time_base
+            elif stream.duration and stream.time_base:
+                duration = float(stream.duration * stream.time_base)
+
+            rate = stream.average_rate or stream.guessed_rate
+            fps = float(rate) if rate else 0.0
+
+            # Some containers report no duration at all. Frame count over rate is the
+            # fallback, and it has to be read while the container is still open.
+            if duration <= 0 and fps > 0 and stream.frames:
+                duration = float(stream.frames) / fps
+
+            thumb = ""
+            try:
+                frame = next(container.decode(video=0), None)
+                if frame is not None:
+                    image = frame.to_image()
+                    image.thumbnail((512, 512))
+                    buffer = _io.BytesIO()
+                    image.convert("RGB").save(buffer, format="JPEG", quality=90)
+                    thumb = "data:image/jpeg;base64," + \
+                        base64.b64encode(buffer.getvalue()).decode("ascii")
+            except Exception as e:
+                # a thumbnail is a nicety; the clip is still usable without one
+                log.debug("[MiniMaxDirector] probe thumbnail failed for %s: %s", path, e)
+
+        log.info("[MiniMaxDirector] probed '%s': %s %dx%d, %.2fs @ %.2f fps",
+                 os.path.basename(path), codec or "unknown", width, height, duration, fps)
+        return web.json_response({"status": "success", "duration": round(duration, 3),
+                                  "fps": round(fps, 4), "width": width, "height": height,
+                                  "codec": codec, "thumb": thumb})
+    except Exception as e:
+        log.warning("[MiniMaxDirector] probe_video failed: %s", e)
+        return web.json_response({"status": "error", "message": str(e)})
+
+
 @PromptServer.instance.routes.get("/minimax_director_get_audio")
 async def minimax_director_get_audio(request):
     filename = request.query.get("filename")

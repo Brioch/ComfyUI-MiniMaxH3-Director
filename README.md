@@ -265,6 +265,12 @@ These are enforced, with a warning naming exactly what was dropped:
 
 Output envelope: 4–15 s at 24 fps. Aspect ratios 21:9, 16:9, 4:3, 1:1, 3:4, 9:16.
 
+**Video formats**: anything your ComfyUI can decode. The editor previews a reference video
+in the browser, which is fussier than the renderer — HEVC, ProRes and 10-bit footage inside
+an ordinary `.mp4` or `.mov` are commonly refused. When that happens the server reads the
+file instead and the clip lands on the track as usual; you may lose the filmstrip preview,
+never the clip. If the server cannot read it either, you get a message saying so.
+
 Anything you drop on a track is uploaded to `ComfyUI/input/whatdreamscost/`. That is the
 same folder LTX Director uses, deliberately — if you run both, assets and saved timelines
 carry over between them.
