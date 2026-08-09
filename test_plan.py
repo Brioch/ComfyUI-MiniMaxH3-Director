@@ -245,12 +245,12 @@ spec_tl = {
     "overall_soundscape": "Soft indoor coffee-shop room tone throughout.",
     "non_diegetic_music": "N/A"}
 SPEC_GOLDEN = (
-    "subject_definitions: "
+    "subject_definitions:\n"
     "<Subject 1> is the coffee shop with an exposed brick wall and an orange tufted sofa, "
-    "shown in <Picture 1>. "
-    "<Subject 2> is a fluffy white Samoyed with a curved tail, shown in <Picture 2>. "
-    "<Picture 3> is the first frame of [Shot 1]. "
-    "<Picture 4> is the last frame of [Shot 2]. "
+    "shown in <Picture 1>.\n"
+    "<Subject 2> is a fluffy white Samoyed with a curved tail, shown in <Picture 2>.\n"
+    "<Picture 3> is the first frame of [Shot 1].\n"
+    "<Picture 4> is the last frame of [Shot 2].\n"
     "<Audio 1> is a reference audio clip: its signal is reused in the target video."
     "\n\n"
     "summary: [keyframe completion + reference generation + audio reuse]"
@@ -342,6 +342,80 @@ noted = compile(tl([img(0, 144)], ref_mode="ON",
 check_in("a written retention note wins over the generated one",
          "attribute_transfer - her coat colour moves to the stallholder.", noted["prompt"])
 
+# ------------------------------------------------- written retention notes
+# The guide's own retention lines name the subject's actual features rather than a stock
+# phrase — "the Samoyed's thick white fur, pointed ears, dark nose, and curved tail are
+# retained". Every reference type has to be able to say that.
+noted_pic = compile(tl([img(0, 144, "a.png", prompt="she enters",
+                            refNote="the doorway framing and the rain on the glass")],
+                       ref_mode="ON"))
+check_in("a written note replaces a picture's generated sentence",
+         "<Picture 1> ([Shot 1] first frame): fully_preserved - the doorway framing and "
+         "the rain on the glass.", noted_pic["prompt"])
+
+noted_vid = compile(tl([], ref_mode="ON",
+                       motionSegments=[{"videoFile": "v.mp4", "fileName": "v.mp4",
+                                        "start": 0, "length": 120,
+                                        "retention": "partially_preserved",
+                                        "refNote": "the slow push-in is kept, the handheld "
+                                                   "drift is not"}]))
+check_in("a written note replaces a reference video's generated sentence",
+         "<Video 1> (motion and camera work): partially_preserved - the slow push-in is "
+         "kept, the handheld drift is not.", noted_vid["prompt"])
+
+noted_aud = compile(tl([], ref_mode="ON",
+                       audioSegments=[{"audioFile": "a.wav", "start": 0, "length": 96,
+                                       "retention": "reference",
+                                       "refNote": "the speaker's measured delivery guides "
+                                                  "the dialogue"}]),
+                    use_custom_audio=True)
+check_in("a written note replaces an audio clip's generated sentence",
+         "<Audio 1>: reference - the speaker's measured delivery guides the dialogue.",
+         noted_aud["prompt"])
+check("a note already ending in punctuation gains none",
+      compile(tl([], ref_mode="ON",
+                 subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                            "retentionNote": "Her scar stays on the left cheek!"}])
+              )["prompt"].count("cheek!"), 1)
+
+# the exact line the reference guide prints, reproduced end to end
+samoyed = compile(tl([img(0, 120, "a.png", prompt="@ref1 lunges for the cookie"),
+                      img(120, 120, "b.png", prompt="@ref1 is pulled back")],
+                     ref_mode="ON",
+                     subjects=[{"images": [{"b64": "x", "name": "dog.png"}],
+                                "kind": "animal",
+                                "description": "the fluffy white Samoyed",
+                                "retention": "fully_preserved",
+                                "retentionNote": "the Samoyed's thick white fur, pointed "
+                                                 "ears, dark nose, and curved tail are "
+                                                 "retained"}]),
+                   duration_f=240)
+check_in("the guide's own retention line can be reproduced exactly",
+         "<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - the Samoyed's "
+         "thick white fur, pointed ears, dark nose, and curved tail are retained.",
+         samoyed["prompt"])
+
+# ------------------------------------------------- Analyze output parsing
+check("split_analysis reads both labelled lines",
+      plan.split_analysis("DESCRIPTION: A fluffy white Samoyed.\n"
+                          "RETAINED: thick white fur, pointed ears"),
+      ("A fluffy white Samoyed.", "thick white fur, pointed ears"))
+check("unlabelled output is all description — where a single blob went before",
+      plan.split_analysis("A fluffy white Samoyed with a curved tail."),
+      ("A fluffy white Samoyed with a curved tail.", ""))
+check("markdown decoration around the labels is tolerated",
+      plan.split_analysis("**Description:** A night market.\n**Retained:** neon signage"),
+      ("A night market.", "neon signage"))
+check("a chatty preamble is dropped once a label appears",
+      plan.split_analysis("Sure! Here is the analysis:\nDESCRIPTION: A red coat.\n"
+                          "RETAINED: the collar shape"),
+      ("A red coat.", "the collar shape"))
+check("only one label is fine", plan.split_analysis("DESCRIPTION: just this"),
+      ("just this", ""))
+check("a multi-line section is joined",
+      plan.split_analysis("RETAINED: the fur\nand the tail")[1], "the fur and the tail")
+check("split_analysis on empty text", plan.split_analysis(""), ("", ""))
+
 # ------------------------------------------------- subject kinds
 # <Subject N> is not a character slot: "people, animals, or objects; scenes, backgrounds,
 # or environments; clothing, props, interfaces, or visual effects; styles, actions,
@@ -382,12 +456,18 @@ check_in("a storyboard image retains planning, not framing",
 
 subj_role = compile(tl([img(0, 144, "a.png", prompt="she enters"),
                         img(144, 144, "coat.png", prompt="a wide shot", refRole="subject",
-                            refKind="clothing", refNote="a long red wool coat")],
+                            refKind="clothing", refDesc="a long red wool coat",
+                            refNote="the cut and the brass buttons are kept")],
                        ref_mode="ON"))
 check_in("a subject-only image is cited inside a subject definition",
          "<Subject 1> is a long red wool coat, shown in <Picture 2>.", subj_role["prompt"])
 check_not_in("a subject-only image earns no standalone picture entry",
              "<Picture 2> is", subj_role["prompt"])
+# refDesc and refNote are two different sentences in two different sections, and sharing
+# one key would mean a subject-defining image could carry one or the other but never both.
+check_in("a subject-only image keeps its own retention note as well as its description",
+         "<Subject 1>: fully_preserved - the cut and the brass buttons are kept.",
+         subj_role["prompt"])
 check("a subject-only image is no longer a keyframe",
       subj_role["ref_image_slots"][1].get("keyframe"), None)
 check("...while an untouched image still is",

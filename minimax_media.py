@@ -360,11 +360,43 @@ _PROVIDER_DEFAULTS = {
     "custom": {"url": "", "model": ""},
 }
 
-_ANALYZE_PROMPT = (
-    "Describe the character's physical appearance in two concise sentences. "
-    "Specify their hair color/style, face details, and their clothing type/color. "
-    "Keep the entire response very brief."
-)
+# What to look at, per subject kind. A slot is not necessarily a character — the reference
+# guide's <Subject N> covers scenes, props, styles and poses too — and asking for hair and
+# clothing when the image is a coffee shop produced exactly the answer you would expect.
+_ANALYZE_SUBJECT = {
+    "person": ("person", "hair colour and style, face, build, and clothing type and colour"),
+    "animal": ("animal", "species, markings, coat, and build"),
+    "object": ("object", "shape, material, colour, and any markings"),
+    "environment": ("place", "architecture, furnishing, materials, and lighting"),
+    "clothing": ("garment", "cut, colour, material, and fastenings"),
+    "prop": ("prop", "shape, material, colour, and signs of wear"),
+    "interface": ("interface", "layout, typography, iconography, and colour"),
+    "effect": ("visual effect", "shape, colour, motion, and how it interacts with the scene"),
+    "style": ("visual style", "palette, contrast, grain, and grade"),
+    "action": ("action", "the movement, its timing, and the body mechanics"),
+    "expression": ("facial expression", "the eyes, mouth, and what it conveys"),
+    "pose": ("pose", "posture, limb placement, and weight distribution"),
+}
+
+
+def analyze_prompt(kind):
+    """Ask the vision model for the slot's two sentences, in labelled lines.
+
+    Two answers, not one: `DESCRIPTION` becomes the `<Subject N>` definition and
+    `RETAINED` becomes its retention_analysis line. They are different sentences in
+    different sections — one says what the thing is, the other says what has to survive
+    into the generated video — and the guide's own example writes both.
+    """
+    noun, look_for = _ANALYZE_SUBJECT.get(kind or "", _ANALYZE_SUBJECT["person"])
+    return (
+        "Look at the reference image(s) of this %s and answer in exactly two lines, "
+        "using these labels and nothing else:\n"
+        "DESCRIPTION: one concise sentence naming the %s.\n"
+        "RETAINED: a short comma-separated list of the specific features that must stay "
+        "identical in a generated video.\n"
+        "Do not add any other text, headings or commentary."
+        % (noun, look_for)
+    )
 
 
 def normalize_base_url(url, fallback=""):
@@ -489,9 +521,11 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
 @PromptServer.instance.routes.post("/minimax_director/analyze_character")
 async def analyze_character_endpoint(request):
     try:
+        from . import minimax_plan as plan
         data = await request.json()
         image_b64 = data.get("image_b64", "")
         char_index = int(data.get("char_index", 0))
+        kind = plan.sanitize_kind(data.get("kind"))
         provider, base_url, model_name = _resolve_provider(data)
 
         if provider == "off":
@@ -504,16 +538,18 @@ async def analyze_character_endpoint(request):
         if not cleaned:
             return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
 
-        log.info("[MiniMaxDirector] Analyzing Character %d via %s (%s, model '%s')...",
-                 char_index + 1, provider, base_url, model_name)
+        log.info("[MiniMaxDirector] Analyzing reference slot %d (%s) via %s (%s, model "
+                 "'%s')...", char_index + 1, kind, provider, base_url, model_name)
         try:
-            generated_text = await vlm_generate(cleaned, _ANALYZE_PROMPT, provider,
+            generated_text = await vlm_generate(cleaned, analyze_prompt(kind), provider,
                                                 base_url, model_name)
         except VLMError as e:
             return web.json_response({"status": "error", "message": str(e)})
 
+        description, retained = plan.split_analysis(generated_text)
         log.info("[MiniMaxDirector] Analysis complete: %s", generated_text)
-        return web.json_response({"status": "success", "description": generated_text})
+        return web.json_response({"status": "success", "description": description,
+                                  "retention_note": retained})
     except Exception as e:
         log.error("[MiniMaxDirector] Failed to analyze character: %s", e)
         return web.json_response({"status": "error", "message": str(e)}, status=500)

@@ -369,10 +369,15 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
         subject_no += 1
         label = "<Subject %d>" % subject_no
         s["subject"] = subject_no
-        lines.append(_subject_sentence(label, s.get("note"), s["kind"],
+        # `desc` says what the image defines, `note` says what survives into the target —
+        # two different sentences in two different sections, so they are two fields. One
+        # field would mean a subject-defining image could carry one or the other and never
+        # both, and would have to mean something else again on a frame anchor.
+        lines.append(_subject_sentence(label, s.get("desc"), s["kind"],
                                        "<Picture %d>" % (i + 1)))
         labels.append({"label": label, "marker": s["retention"], "kind": s["kind"],
-                       "note": "", "where": "", "audio": False, "subject": subject_no})
+                       "note": s.get("note", ""), "where": "", "audio": False,
+                       "subject": subject_no})
 
     # --- <Picture N>: only the real frame and storyboard anchors.
     # Character-slot images are deliberately absent — they are cited above instead. So are
@@ -523,9 +528,12 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
 
     Section order is the reference guide's: subject_definitions, summary,
     retention_analysis, detailed_description, then the two sound fields.
-    retention_analysis is the one section written one entry per line, because its entries
-    are `label (where): marker - note` records rather than prose, and running them
-    together makes the markers hard to pick out.
+
+    subject_definitions and retention_analysis are written one entry per line, the way the
+    guide's own example lays them out. Both are lists of records — one per reference label
+    — rather than prose, and running them together into a paragraph makes it genuinely
+    hard to see where one label's definition ends and the next begins. detailed_description
+    stays a single flowing block, because that one really is prose.
     """
     parts = []
 
@@ -535,7 +543,7 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
         parts.append(instruction.strip())
 
     if subject_lines:
-        parts.append("subject_definitions: " + " ".join(subject_lines))
+        parts.append("subject_definitions:\n" + "\n".join(subject_lines))
     if (summary or "").strip():
         parts.append("summary: " + summary.strip())
     if retention_lines:
@@ -610,6 +618,59 @@ def split_audio_music(text):
         if stripped:
             current.append(stripped)
     return "\n".join(kept).strip(), " ".join(sound).strip(), " ".join(music).strip()
+
+
+ANALYSIS_DESC_PREFIX = "description:"
+ANALYSIS_KEEP_PREFIX = "retained:"
+
+
+def split_analysis(text):
+    """Split the Analyze button's two labelled lines into (description, retained).
+
+    The vision model is asked for `DESCRIPTION:` and `RETAINED:`, which fill the slot's
+    two boxes: what the subject *is*, and what has to survive into the target video.
+
+    Local models ignore an output format often enough that the unlabelled case has to be
+    the safe one — everything becomes the description, which is where a single blob of
+    text was going before there was a second box. A label may also arrive lowercased, in
+    bold, or with the model's own preamble above it, so matching is case-insensitive,
+    tolerant of `*` and `#` decoration, and picks up wherever the first label appears.
+
+    Lives here rather than in minimax_media so it can be tested without importing
+    aiohttp or ComfyUI — the same reason split_audio_music is here.
+    """
+    if not text:
+        return "", ""
+    rows = []
+    labelled = False
+    for line in str(text).splitlines():
+        stripped = line.strip().lstrip("*#-• ").strip()
+        low = stripped.lower()
+        if low.startswith(ANALYSIS_DESC_PREFIX):
+            rows.append(("desc", stripped.split(":", 1)[1]))
+            labelled = True
+        elif low.startswith(ANALYSIS_KEEP_PREFIX):
+            rows.append(("keep", stripped.split(":", 1)[1]))
+            labelled = True
+        else:
+            rows.append((None, stripped))
+
+    desc, keep, current = [], [], None
+    for kind, value in rows:
+        if kind:
+            current = desc if kind == "desc" else keep
+        elif current is None:
+            # Before any label. With labels present this is the model's own preamble
+            # ("Sure! Here is the analysis:") and belongs in neither box; with no labels
+            # anywhere it is the whole answer, and the description is where a single blob
+            # of text went before there was a second box.
+            if labelled:
+                continue
+            current = desc
+        value = value.strip().strip("*").strip()
+        if value:
+            current.append(value)
+    return " ".join(desc).strip(), " ".join(keep).strip()
 
 
 def compile_storyboard(global_prompt, shots, total_seconds):
@@ -822,6 +883,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                     "picture_role": ev["role"],
                     "kind": sanitize_kind(seg.get("refKind")),
                     "retention": sanitize_retention(seg.get("retention")),
+                    "desc": (seg.get("refDesc") or "").strip(),
                     "note": (seg.get("refNote") or "").strip(),
                     "shot_no": written_shot_no.get(ev.get("shot_index")),
                     "at": fmt_seconds(ev["rel_start_f"] / fps)}

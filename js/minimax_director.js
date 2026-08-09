@@ -26,13 +26,19 @@ const MOTION_TRACK_HEIGHT = 80; // used as the Reference Video track height
 const CANVAS_HEIGHT = RULER_HEIGHT + BLOCK_HEIGHT + MOTION_TRACK_HEIGHT + AUDIO_TRACK_HEIGHT;
 const HANDLE_HIT_PX = 14;
 const MIN_SEGMENT_LENGTH = 6;
-// The overall_soundscape / non_diegetic_music strip is docked inside the global prompt
-// box, so the box has to be tall enough for both. MUST match .mmxd-sound-row's height in
-// the stylesheet — the CSS shortens the textarea by exactly this much, and if the two
-// disagree the prompt area either overlaps the strip or leaves a gap.
-const SOUND_ROW_HEIGHT = 54;
+// The overall_soundscape / non_diegetic_music / summary strip sits *beside* the global
+// prompt box as a flex sibling, not inside it. It used to be absolutely positioned on top
+// of the textarea, with the textarea shortened by a hard-coded calc() to make room — so
+// the two fought over the same space and the strip sat on the box's own border. As a flex
+// child the panel divides itself, and these constants only have to reserve node height.
+// The 12px of bottom padding clears the panel's absolutely-positioned drag strip.
+const SOUND_ROW_HEIGHT = 66;   // 50px of field + 4 top + 12 bottom to clear the resizer
 const GLOBAL_PROMPT_MIN_H = 60;                                    // the prompt box alone
 const GLOBAL_PROP_MIN_H = GLOBAL_PROMPT_MIN_H + SOUND_ROW_HEIGHT;  // prompt box + strip
+// The per-reference "describes / retained" strip in the segment properties panel, built
+// the same way. Hiding it with display:none gives the prompt box its height straight back.
+const REF_NOTE_ROW_HEIGHT = 66;
+const PROP_MIN_H = 90;                                             // prompt box alone
 const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio", "inpaint_audio", "use_custom_motion", "override_audio"];
@@ -649,12 +655,14 @@ const STYLES = `
   /* --- Subject reference slots --- */
   .mmxd-characters-container { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px; margin-top: 6px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
   /* grows to nine slots, so they wrap into rows of three rather than shrinking to slivers */
-  .mmxd-character-slot { flex: 1 1 calc(33.333% - 8px); min-width: 120px; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
+  /* height is set inline from the dragged panel size — deliberately not duplicated here */
+  .mmxd-character-slot { flex: 1 1 calc(33.333% - 8px); min-width: 120px; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: border-color 0.2s ease, background 0.2s ease; box-sizing: border-box; }
   .mmxd-character-slot:hover { border-color: #666; background: #252525; }
   .mmxd-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
   .mmxd-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
   .mmxd-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
-  .mmxd-character-previews-row { display: flex; width: 100%; height: 52px; gap: 4px; position: relative; }
+  /* the only part of a slot that flexes, so dragging the panel taller grows the images */
+  .mmxd-character-previews-row { display: flex; width: 100%; flex: 1 1 auto; min-height: 44px; gap: 4px; position: relative; }
   .mmxd-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
   .mmxd-character-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
   .mmxd-character-delete { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, 0.85); color: #ff4444; border: none; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 9px; transition: background 0.15s; z-index: 10; padding: 0; }
@@ -662,8 +670,14 @@ const STYLES = `
   .mmxd-character-validate-btn { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.85); color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: bold; cursor: pointer; transition: all 0.15s; z-index: 20; }
   .mmxd-character-validate-btn:hover { background: #4fff8f; color: #000; border-color: #4fff8f; }
   .mmxd-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
-  .mmxd-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
-  .mmxd-character-desc:focus { border-color: #4fff8f; }
+  /* Two captioned boxes per slot: what the subject IS, and what has to survive into the
+     target video. Both are fixed height so the previews row above them takes the slack. */
+  .mmxd-character-field { position: relative; width: 100%; flex: 0 0 32px; margin-top: 6px; background: #111; border: 1px solid #333; border-radius: 4px; box-sizing: border-box; z-index: 10; }
+  .mmxd-character-field.mmxd-field-first { margin-top: 10px; }
+  .mmxd-character-field.focus-active { border-color: #4fff8f; }
+  .mmxd-character-field-label { position: absolute; top: 2px; left: 5px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
+  .mmxd-character-desc { position: absolute; top: 12px; left: 0; width: 100%; height: calc(100% - 12px); background: transparent; color: #e0e0e0; border: none; font-size: 9px; line-height: 1.3; resize: none; box-sizing: border-box; padding: 0 4px 2px 4px; outline: none; font-family: inherit; }
+  .mmxd-character-desc::placeholder { color: #4a4a4a; }
   /* --- per-reference kind / retention controls --- */
   .mmxd-ref-controls { display: flex; gap: 4px; width: 100%; margin-top: 4px; box-sizing: border-box; }
   .mmxd-ref-controls .mmxd-msel { flex: 1 1 0; min-width: 0; height: 20px; font-size: 9px; padding: 0 4px 0 6px; }
@@ -693,8 +707,13 @@ const STYLES = `
   /* The wrapper positions its children absolutely, so this row sits at the bottom and
      the prompt area above it is shortened by exactly the same amount. Nothing here
      changes the node's height: the container keeps whatever the user resized it to. */
-  .mmxd-sound-row { position: absolute; bottom: 0; left: 0; width: 100%; height: 54px; display: flex; gap: 6px; padding: 0 8px 6px 8px; box-sizing: border-box; }
-  .mmxd-prompt-area.mmxd-has-sound { height: calc(100% - 20px - 54px); }
+  /* A flex child of the properties panel, not an overlay inside the prompt box. It was
+     absolutely positioned on top of the textarea, which meant the two fought over the
+     same space: the box shrank by a hard-coded calc() and the strip sat on its border. */
+  .mmxd-sound-row { flex: 0 0 66px; width: 100%; display: flex; gap: 6px; padding: 4px 0 12px 0; box-sizing: border-box; }
+  /* same two-field shape as the sound strip, but a flex child of the properties panel
+     rather than a strip docked inside the prompt box — see REF_NOTE_ROW_HEIGHT */
+  .mmxd-ref-note-row { flex: 0 0 66px; width: 100%; display: flex; gap: 6px; padding: 4px 0 12px 0; box-sizing: border-box; }
   .mmxd-sound-field { position: relative; flex: 1 1 0; min-width: 0; background: #1c1c1c; border: 1px solid #111; border-radius: 4px; box-sizing: border-box; }
   .mmxd-sound-field.focus-active { border-color: #888; }
   .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
@@ -860,10 +879,19 @@ const REF_ROLE_TIP =
   "defines a subject — it only defines a look, so it gets no <Picture> entry";
 
 // Slots wrap three to a row; the node has to reserve the rows or it crops the last one.
-const SUBJECT_SLOT_H = 148, SUBJECT_SLOT_GAP = 12;
-function subjectPanelHeight(slotCount) {
+// The slot height is the user's, dragged from the strip under the panel — the previews
+// row is the only part that flexes, so every pixel gained goes to the images rather than
+// to the text boxes. Unlike SOUND_ROW_HEIGHT there is no matching CSS literal to keep in
+// step: the height is set inline per slot, precisely so there is only one of it.
+// 8 padding + 44 previews + 42 first field + 38 second field + 24 controls
+const SUBJECT_SLOT_MIN_H = 160;
+const SUBJECT_SLOT_DEFAULT_H = 215;
+const SUBJECT_SLOT_GAP = 12;
+const SUBJECT_RESIZER_H = 12;
+function subjectPanelHeight(slotCount, slotHeight) {
   const rows = Math.max(1, Math.ceil(slotCount / 3));
-  return rows * SUBJECT_SLOT_H + (rows - 1) * SUBJECT_SLOT_GAP + 20;
+  const h = Math.max(SUBJECT_SLOT_MIN_H, slotHeight || SUBJECT_SLOT_DEFAULT_H);
+  return rows * h + (rows - 1) * SUBJECT_SLOT_GAP + 20 + SUBJECT_RESIZER_H;
 }
 
 function emptySubjectSlot() {
@@ -2567,6 +2595,9 @@ class TimelineEditor {
     refOptionSelect.addEventListener("change", (e) => {
       this.timeline.reference_mode = e.target.value;
       this.commitChanges();
+      // the describes/retained strip only exists in ref2va, so it has to appear and
+      // disappear with the switch rather than waiting for the next selection change
+      this.updateUIFromSelection();
     });
     this.refOptionSelect = refOptionSelect;
 
@@ -3070,7 +3101,8 @@ class TimelineEditor {
     const globalPromptWrapper = document.createElement("div");
     globalPromptWrapper.className = "mmxd-prompt-wrapper";
     globalPromptWrapper.style.width = "100%";
-    globalPromptWrapper.style.height = "100%";
+    globalPromptWrapper.style.flex = "1 1 auto";
+    globalPromptWrapper.style.minHeight = "0";
 
     this.globalPromptLabel = document.createElement("div");
     this.globalPromptLabel.className = "mmxd-prompt-label";
@@ -3078,7 +3110,7 @@ class TimelineEditor {
     globalPromptWrapper.appendChild(this.globalPromptLabel);
 
     this.globalPromptInput = document.createElement("textarea");
-    this.globalPromptInput.className = "mmxd-prompt-area mmxd-has-sound";
+    this.globalPromptInput.className = "mmxd-prompt-area";
     this.globalPromptInput.placeholder =
       "Enter global prompt here...  (Audio: / Music: lines are lifted into the two boxes below)";
     this.globalPromptInput.spellcheck = true;
@@ -3165,7 +3197,6 @@ class TimelineEditor {
     this.summaryInput = makeSoundField(
       "summary", "summary",
       "One paragraph on the target video and what each reference is for. The [task type] prefix is added for you.");
-    globalPromptWrapper.appendChild(soundRow);
 
     this.globalPromptInput.addEventListener("input", (e) => {
       const val = e.target.value;
@@ -3237,6 +3268,7 @@ class TimelineEditor {
     });
 
     globalPropContainer.appendChild(globalPromptWrapper);
+    globalPropContainer.appendChild(soundRow);
     globalPropContainer.appendChild(globalPropResizer);
 
     const propResizer = document.createElement("div");
@@ -3262,7 +3294,7 @@ class TimelineEditor {
           stopDrag();
           return;
         }
-        const newH = Math.max(90, startH + (ev.clientY - startY));
+        const newH = Math.max(this._propMinH(), startH + (ev.clientY - startY));
         this.propHeight = newH;
         this.node.properties.propHeight = newH;
         propContainer.style.height = `${newH}px`;
@@ -3291,7 +3323,10 @@ class TimelineEditor {
     this.promptWrapper = document.createElement("div");
     this.promptWrapper.className = "mmxd-prompt-wrapper";
     this.promptWrapper.style.width = "100%";
-    this.promptWrapper.style.height = "100%";
+    // flex rather than height:100% so the reference-note strip below can take its own
+    // room when it is shown, and give it straight back when it is hidden
+    this.promptWrapper.style.flex = "1 1 auto";
+    this.promptWrapper.style.minHeight = "0";
     this.promptWrapper.style.display = "none";
 
     this.segmentPromptLabel = document.createElement("div");
@@ -3348,9 +3383,67 @@ class TimelineEditor {
     this.audioInfoArea = document.createElement("div");
     this.audioInfoArea.className = "mmxd-audio-info";
 
+    // --- Reference note strip -------------------------------------------------------
+    // Sits in propContainer beside the prompt box rather than inside it, because the
+    // audio branch of updateUIFromSelection hides promptWrapper outright — and an audio
+    // clip is exactly one of the references that needs a retention note.
+    this.refNoteRow = document.createElement("div");
+    this.refNoteRow.className = "mmxd-ref-note-row";
+    this.refNoteRow.style.display = "none";
+
+    const makeRefNoteField = (label, placeholder) => {
+      const field = document.createElement("div");
+      field.className = "mmxd-sound-field";
+
+      const cap = document.createElement("div");
+      cap.className = "mmxd-sound-label";
+      cap.textContent = label;
+      field.appendChild(cap);
+
+      const area = document.createElement("textarea");
+      area.className = "mmxd-sound-area";
+      area.placeholder = placeholder;
+      area.spellcheck = true;
+      area.addEventListener("focus", () => {
+        field.classList.add("focus-active");
+        this.wrapper.classList.add("has-focus");
+      });
+      area.addEventListener("blur", () => {
+        field.classList.remove("focus-active");
+        this.wrapper.classList.remove("has-focus");
+      });
+      field.appendChild(area);
+      this.refNoteRow.appendChild(field);
+      return { field, area };
+    };
+
+    const descField = makeRefNoteField(
+      "describes", "what this image defines, e.g. a long red wool coat");
+    const noteField = makeRefNoteField(
+      "retained", "what survives into the video — leave empty for the default");
+    this.refDescField = descField.field;
+    this.refDescInput = descField.area;
+    this.refNoteInput = noteField.area;
+
+    // Write to the timeline array, never to the segment object the selection handed us:
+    // while a drag is in flight that is a preview clone and the edit would be discarded.
+    const writeRefText = (key, value) => {
+      const list = this.getSegmentArray(this.selectionType);
+      const target = list && list[this.selectedIndex];
+      if (!target) return;
+      target[key] = value;
+      this.commitChanges(true);
+      if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+    };
+    this.refDescInput.addEventListener("input",
+      () => writeRefText("refDesc", this.refDescInput.value));
+    this.refNoteInput.addEventListener("input",
+      () => writeRefText("refNote", this.refNoteInput.value));
+
     propContainer.appendChild(this.promptWrapper);
     propContainer.appendChild(this.motionInfoArea);
     propContainer.appendChild(this.audioInfoArea);
+    propContainer.appendChild(this.refNoteRow);
     propContainer.appendChild(propResizer);
 
     this.wrapper.addEventListener("dragover", (e) => {
@@ -5733,6 +5826,56 @@ class TimelineEditor {
     }
   }
 
+  // The properties panel has to hold the prompt box *and*, when a reference is selected,
+  // the note strip. Without this the default 90px panel would leave the prompt box 24px.
+  _propMinH() {
+    const showing = this.refNoteRow && this.refNoteRow.style.display !== "none";
+    return PROP_MIN_H + (showing ? REF_NOTE_ROW_HEIGHT : 0);
+  }
+
+  // Opens the panel far enough that showing the strip does not squeeze the prompt box to
+  // nothing. Only ever grows — a panel the user has already dragged taller is left alone.
+  _growPropForRefNote() {
+    const min = this._propMinH();
+    if (!this.propContainer || this.propHeight >= min) return;
+    this.propHeight = min;
+    if (this.node?.properties) this.node.properties.propHeight = min;
+    this.propContainer.style.height = `${min}px`;
+    if (this.node?.setDirtyCanvas && typeof this.node.computeSize === "function"
+        && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
+  }
+
+  // Shows the describes/retained strip for whichever reference is selected, and fills it.
+  // Hidden entirely with refs off: with no <Subject>/<Picture>/<Video>/<Audio> labels in
+  // the prompt there is nothing for either sentence to attach to.
+  _syncRefNoteRow(seg) {
+    if (!this.refNoteRow) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    const isRef = !!seg && (
+      this.selectionType === "motion" || this.selectionType === "audio" ||
+      (this.selectionType === "image" && (seg.type === "image" || seg.type === "video")));
+
+    if (!refsOn || !isRef || this.retakeMode) {
+      this.refNoteRow.style.display = "none";
+      return;
+    }
+    this.refNoteRow.style.display = "flex";
+    this._growPropForRefNote();
+
+    // `describes` only means something for an image that defines a subject rather than
+    // anchoring a frame — every other reference has just the one sentence.
+    const describes = this.selectionType === "image" && seg.refRole === "subject";
+    this.refDescField.style.display = describes ? "" : "none";
+    if (describes) this.refDescInput.value = seg.refDesc || "";
+    this.refNoteInput.value = seg.refNote || "";
+    this.refNoteInput.placeholder = this.selectionType === "audio"
+      ? "what the target keeps from this audio — leave empty for the default"
+      : "what survives into the video — leave empty for the default";
+  }
+
   updateUIFromSelection() {
     if (this.selectedSegmentIds && this.isMultiSelectActive()) {
       if (this.globalPromptInput) {
@@ -5781,6 +5924,9 @@ class TimelineEditor {
       if (this.segmentBoundsDisplay) {
         this.segmentBoundsDisplay.textContent = "Multiple Segments Selected";
       }
+      // there is no single reference to annotate, and leaving the strip up would show
+      // the previously selected segment's text as if it belonged to this selection
+      this._syncRefNoteRow(null);
       return;
     }
 
@@ -5827,6 +5973,10 @@ class TimelineEditor {
       this.promptInput.placeholder = "";
       this.promptInput.style.opacity = "";
     }
+
+    // Set once here rather than in each branch below: the strip belongs to the selected
+    // segment, not to whichever of the prompt box / motion info / audio info is on show.
+    this._syncRefNoteRow(seg);
 
     if (this.retakeMode) {
       if (this.promptWrapper) this.promptWrapper.style.display = "block";
@@ -9286,6 +9436,14 @@ class TimelineEditor {
     return this.timeline.subjects;
   }
 
+  // Dragged from the strip under the panel and remembered per node, exactly like
+  // propHeight and globalPropHeight. Clamped on read so a workflow saved when the slot
+  // was a fixed 148px does not come back too short for the two text boxes.
+  subjectSlotHeight() {
+    const stored = this.node?.properties?.subjectSlotHeight;
+    return Math.max(SUBJECT_SLOT_MIN_H, stored || SUBJECT_SLOT_DEFAULT_H);
+  }
+
   // Three always visible, then one empty slot ahead of whatever is filled, so the panel
   // grows only as far as it is used instead of showing nine empty boxes on day one.
   visibleSlotCount() {
@@ -9318,8 +9476,12 @@ class TimelineEditor {
       }
     });
     slot.addEventListener("click", (e) => {
+      // clicking anywhere else in the slot opens a file picker, so every interactive
+      // child has to be named here — including the field wrappers, whose border and
+      // caption are part of the box the user is aiming at
       if (e.target.closest(".mmxd-character-delete") ||
           e.target.closest(".mmxd-character-validate-btn") ||
+          e.target.closest(".mmxd-character-field") ||
           e.target.closest(".mmxd-character-desc") ||
           e.target.closest(".mmxd-msel")) return;
 
@@ -9338,16 +9500,81 @@ class TimelineEditor {
   }
 
   createCharacterSlots(parent) {
+    const wrap = document.createElement("div");
+    wrap.style.position = "relative";
+    wrap.style.width = "100%";
+    wrap.style.flexShrink = "0";
+
     const container = document.createElement("div");
     container.className = "mmxd-characters-container";
 
     this.subjectSlots();
     this.characterSlots = [];
 
-    parent.appendChild(container);
+    wrap.appendChild(container);
+    wrap.appendChild(this._buildSubjectResizer());
+    parent.appendChild(wrap);
     this.charPanelContainer = container;
-    this.charPanelHeight = subjectPanelHeight(3);
+    this.charPanelHeight = subjectPanelHeight(3, this.subjectSlotHeight());
     this.updateCharacterSlotsUI();
+  }
+
+  // Same grab strip as the prompt and global-prompt panels, so the reference panel resizes
+  // the way every other part of the editor already does. Only the slot height is stored;
+  // the panel height follows from it and the row count.
+  _buildSubjectResizer() {
+    const bar = document.createElement("div");
+    bar.style.position = "absolute";
+    bar.style.bottom = "0px";
+    bar.style.left = "0px";
+    bar.style.width = "100%";
+    bar.style.height = `${SUBJECT_RESIZER_H}px`;
+    bar.style.cursor = "ns-resize";
+    bar.style.display = "flex";
+    bar.style.justifyContent = "center";
+    bar.style.alignItems = "flex-end";
+    bar.style.paddingBottom = "4px";
+    bar.title = "Drag to resize the reference images";
+    bar.innerHTML = `<div style="width: 40px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px;"></div>`;
+
+    bar.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startY = e.clientY;
+      const startH = this.subjectSlotHeight();
+
+      const doDrag = (ev) => {
+        if (ev.buttons === 0) { stopDrag(); return; }
+        // one row of slots follows the pointer 1:1; with two rows the panel grows twice
+        // as fast as the drag, which is the same deal the other resizers make
+        const newH = Math.max(SUBJECT_SLOT_MIN_H, startH + (ev.clientY - startY));
+        if (this.node?.properties) this.node.properties.subjectSlotHeight = newH;
+        this._applySubjectSlotHeight();
+      };
+      const stopDrag = () => {
+        window.removeEventListener("mousemove", doDrag, true);
+        window.removeEventListener("mouseup", stopDrag, true);
+        document.body.style.cursor = "default";
+        this.commitChanges(true);
+      };
+
+      document.body.style.cursor = "ns-resize";
+      window.addEventListener("mousemove", doDrag, true);
+      window.addEventListener("mouseup", stopDrag, true);
+    });
+    return bar;
+  }
+
+  // Pushes the dragged height onto every slot element and re-reserves the node's room.
+  _applySubjectSlotHeight() {
+    const h = this.subjectSlotHeight();
+    (this.characterSlots || []).forEach((el) => { el.style.height = `${h}px`; });
+    this.charPanelHeight = subjectPanelHeight(this.characterSlots?.length || 3, h);
+    if (this.node?.setDirtyCanvas && typeof this.node.computeSize === "function"
+        && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
   }
 
   // Adds or removes slot elements so the DOM matches visibleSlotCount(). Called from
@@ -9358,6 +9585,7 @@ class TimelineEditor {
     const want = this.visibleSlotCount();
     const slots = this.subjectSlots();
     while (slots.length < want) slots.push(emptySubjectSlot());
+    const slotH = this.subjectSlotHeight();
     while (this.characterSlots.length < want) {
       const el = this._buildSubjectSlotEl(this.characterSlots.length);
       container.appendChild(el);
@@ -9366,10 +9594,11 @@ class TimelineEditor {
     while (this.characterSlots.length > want) {
       this.characterSlots.pop().remove();
     }
+    this.characterSlots.forEach((el) => { el.style.height = `${slotH}px`; });
 
     // Slots wrap three to a row, so the panel's reserved height has to follow the row
     // count or the node crops the last row the moment a fourth subject is added.
-    const height = subjectPanelHeight(want);
+    const height = subjectPanelHeight(want, slotH);
     const grew = height !== this.charPanelHeight;
     this.charPanelHeight = height;
     // Only once the panel has been through a full build: during construction the widget's
@@ -9527,16 +9756,42 @@ class TimelineEditor {
 
         slot.appendChild(previewsRow);
 
-        const descInput = document.createElement("textarea");
-        descInput.className = "mmxd-character-desc";
-        descInput.value = data.description || "";
-        descInput.placeholder = "manual description...";
-        descInput.addEventListener("input", () => {
-          subjects[i].description = descInput.value;
-          this.commitChanges();
-        });
-        descInput.addEventListener("click", (e) => { e.stopPropagation(); });
-        slot.appendChild(descInput);
+        // Two captioned boxes: what the subject IS (the <Subject N> definition) and what
+        // has to survive into the target video (the retention_analysis line). They are
+        // different sentences in different sections of the prompt, so writing one has
+        // never been a way to say the other.
+        const makeSlotField = (label, key, placeholder, first) => {
+          const field = document.createElement("div");
+          field.className = "mmxd-character-field" + (first ? " mmxd-field-first" : "");
+
+          const cap = document.createElement("div");
+          cap.className = "mmxd-character-field-label";
+          cap.textContent = label;
+          field.appendChild(cap);
+
+          const area = document.createElement("textarea");
+          area.className = "mmxd-character-desc";
+          area.value = data[key] || "";
+          area.placeholder = placeholder;
+          area.spellcheck = true;
+          area.addEventListener("input", () => {
+            subjects[i][key] = area.value;
+            this.commitChanges();
+            if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+          });
+          area.addEventListener("focus", () => field.classList.add("focus-active"));
+          area.addEventListener("blur", () => field.classList.remove("focus-active"));
+          // the slot's own click handler opens a file picker unless the click lands on a
+          // child it knows about
+          area.addEventListener("click", (e) => { e.stopPropagation(); });
+          field.appendChild(area);
+          slot.appendChild(field);
+          return area;
+        };
+
+        makeSlotField("describes", "description", "a woman in a red coat…", true);
+        makeSlotField("retained", "retentionNote",
+                      "identity, face and clothing — leave empty for the default");
 
         // What this subject IS, and how closely to follow it. The kind only supplies a
         // noun for the definition line when no description is typed, so a description
@@ -9617,6 +9872,9 @@ class TimelineEditor {
           clip_name: clip_name,
           image_b64: b64_images,
           char_index: idx,
+          // so the model is asked about a place or a garment when that is what the slot
+          // holds, instead of being asked for hair and clothing regardless
+          kind: this.subjectSlots()[idx]?.kind || "person",
           provider: this.timeline.analyzeProvider || "ollama",
           base_url: this.timeline.analyzeBaseUrl || "",
           model: this.timeline.analyzeModel || "",
@@ -9625,6 +9883,11 @@ class TimelineEditor {
       const result = await resp.json();
       if (result.status === "success") {
         this.subjectSlots()[idx].description = result.description;
+        // A model that ignored the two-line format returns everything as the description
+        // and nothing here, which must not wipe a note the user wrote by hand.
+        if (result.retention_note) {
+          this.subjectSlots()[idx].retentionNote = result.retention_note;
+        }
         btn.textContent = "Success!";
         setTimeout(() => { this.updateCharacterSlotsUI(); this.commitChanges(); }, 1500);
       } else {
@@ -13092,7 +13355,9 @@ app.registerExtension({
           const globalPropH = self._timelineEditor ? (self._timelineEditor.globalPropHeight || 60) : 60;
           // Reserve room for the @refN reference panel at the bottom so the node doesn't
           // collapse and crop it whenever ComfyUI recomputes the node height.
-          const charPanelH = self._timelineEditor ? (self._timelineEditor.charPanelHeight || subjectPanelHeight(3)) : subjectPanelHeight(3);
+          const charPanelH = self._timelineEditor
+            ? (self._timelineEditor.charPanelHeight || subjectPanelHeight(3, self.properties?.subjectSlotHeight))
+            : subjectPanelHeight(3, self.properties?.subjectSlotHeight);
           const nodeWidth = self.size?.[0] || width || 1375;
           return [Math.max(10, nodeWidth - 30), canvasH + propH + globalPropH + charPanelH + 160];
         };

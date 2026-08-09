@@ -47,10 +47,11 @@ see the exact prompt the model will receive while you are still editing it.
 **0.2.0** · 2026-08-09 — full reference mode. A reference is no longer always a character
 and no longer always followed exactly: subject slots carry a **kind** (scene, prop, style,
 …) and every reference carries a **retention marker** from `fully_preserved` to
-`weak_reference`. Timeline images can be frame anchors, storyboard references, or
-subject-defining images that get no `<Picture>` entry at all. Prompts gain a `summary`
-section with a derived `[task type]` prefix, and `retention_analysis` now uses the guide's
-own line format.
+`weak_reference`, plus a box to write the sentence that follows it in your own words.
+Timeline images can be frame anchors, storyboard references, or subject-defining images
+that get no `<Picture>` entry at all. Prompts gain a `summary` section with a derived
+`[task type]` prefix, and `retention_analysis` uses the guide's own line format. The
+reference panel resizes, with the extra height going to the image previews.
 
 **0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
 phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
@@ -301,6 +302,38 @@ Audio has its own set, because copying a signal and imitating one are different 
 Right-click any reference — a timeline image, a reference video, an audio clip — to set
 its marker. Subject slots have theirs in the panel.
 
+### Saying what is retained
+
+The marker is only half the line. After it comes a sentence naming what actually has to
+survive, and the guide's own example is specific rather than generic:
+
+```
+<Subject 2> (appears in [Shot 1], [Shot 2]): fully_preserved - the Samoyed's thick white
+fur, pointed ears, dark nose, and curved tail are retained.
+```
+
+Every reference has a **retained** box for exactly that. Subject slots carry theirs in the
+panel, next to the description; timeline images, reference videos and audio clips get one
+in the properties panel when they are selected. Leave it empty and a sentence is generated
+from the reference's kind instead — so the box is an override, never an obligation.
+
+Subject slots have two boxes, because they feed two different sections of the prompt:
+
+| Box | Becomes |
+|---|---|
+| **describes** | the `<Subject N>` line in `subject_definitions` — what the thing *is* |
+| **retained** | the sentence after the marker in `retention_analysis` — what must *survive* |
+
+An image on the timeline set to **defines a subject** gets both boxes too. Everything else
+gets **retained** alone.
+
+### Resizing the panel
+
+The reference panel drags from the strip along its bottom edge, like the prompt and global
+prompt panels. All the extra height goes to the image previews rather than the text boxes,
+so drag it taller when you need to actually see what you are referencing. The height is
+remembered per node.
+
 ### What an image is *for*
 
 The guide only gives an image its own `<Picture N>` entry when the image really is a
@@ -341,14 +374,16 @@ Gear menu → **Prompt Format**. The default is **MiniMax**, the notation from t
 `VIDEO_PROMPT_WRITING_GUIDE`:
 
 ```
-subject_definitions: <Subject 1> is a baker in a flour-dusted apron, shown in <Picture 1>.
-<Subject 2> is the environment shown in <Picture 2>. <Picture 3> is the first frame of [Shot 1].
+subject_definitions:
+<Subject 1> is a baker in a flour-dusted apron, shown in <Picture 1>.
+<Subject 2> is the environment shown in <Picture 2>.
+<Picture 3> is the first frame of [Shot 1].
 
 summary: [keyframe completion + reference generation] The target video follows <Subject 1>
 opening the bakery.
 
 retention_analysis:
-<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - the identity, face and clothing of <Subject 1> are retained.
+<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - the flour-dusted apron and the wire-rimmed glasses are retained.
 <Subject 2> (appears in [Shot 1]): weak_reference - only a broad similarity to <Subject 2> in style, category, composition and atmosphere is kept.
 <Picture 3> ([Shot 1] first frame): fully_preserved - the framing and composition of <Picture 3> are retained.
 
@@ -371,7 +406,7 @@ presence of video or audio does not automatically create a corresponding task ty
 gear menu's **Task Type** field overrides it, which is how you reach `video editing` and
 `video continuation` — neither of which this node has a path to produce on its own.
 
-The two sound sections have their own boxes under the Global Prompt. What you type there
+The two sound sections and `summary` have their own boxes under the Global Prompt. What you type there
 goes straight into `overall_soundscape` and `non_diegetic_music`. Leave them empty and the
 sections are omitted entirely — an empty heading is worse than none.
 

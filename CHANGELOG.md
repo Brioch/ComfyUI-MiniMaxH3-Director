@@ -30,6 +30,15 @@ than that, and two of its sections were structurally missing from the output.
   because copying a signal and imitating one are different jobs. An off-spec value coming
   from an edited timeline is clamped rather than passed through into the prompt.
 
+- **The sentence after the marker is yours to write.** The guide's own retention lines name
+  actual features rather than a stock phrase — `fully_preserved - the Samoyed's thick white
+  fur, pointed ears, dark nose, and curved tail are retained`. Every reference has a
+  **retained** box for that: subject slots in the panel, timeline images, reference videos
+  and audio clips in the properties panel. Left empty, a sentence is generated from the
+  reference's kind, so the box overrides and never obliges. Subject slots and
+  subject-defining images carry two boxes, because they feed two different sections:
+  **describes** becomes the `<Subject N>` definition, **retained** the retention line.
+
 - **An image only gets a `<Picture N>` entry when it really is one.** The guide: "If an
   image is used only to define a character, scene, costume, or style, do not create a
   standalone picture entry. Instead, cite the image source inside the corresponding
@@ -42,16 +51,22 @@ than that, and two of its sections were structurally missing from the output.
   was prose. The two sections now follow the guide's shapes, and a subject's
   `(appears in [Shot 1], [Shot 3])` is read back off the shot text rather than assumed.
 
+  Both are written one entry per line, the way the guide lays them out. They are lists of
+  records rather than prose, and running a dozen of them together into a paragraph made it
+  genuinely hard to see where one label ended and the next began.
+
   ```
   0.1.5   subject_definitions: <Subject 1> is the character shown in <Picture 1>.
           retention_analysis: Keep the identity, face and clothing of <Subject 1>
                               consistent across every shot. [Shot 1] begins from <Picture 2>.
 
-  0.2.0   subject_definitions: <Subject 1> is a woman in a red coat, shown in <Picture 1>.
-                               <Picture 2> is the first frame of [Shot 1].
+  0.2.0   subject_definitions:
+          <Subject 1> is a woman in a red coat, shown in <Picture 1>.
+          <Picture 2> is the first frame of [Shot 1].
+
           retention_analysis:
-          <Subject 1> (appears in [Shot 1]): fully_preserved - the identity, face and
-            clothing of <Subject 1> are retained.
+          <Subject 1> (appears in [Shot 1]): fully_preserved - the collar shape and the
+            silver necklace are retained.
           <Picture 2> ([Shot 1] first frame): fully_preserved - the framing and
             composition of <Picture 2> are retained.
   ```
@@ -69,6 +84,25 @@ than that, and two of its sections were structurally missing from the output.
   `[Shot 1] she enters. The shot begins from <Picture 2>.` The phrase goes after the
   shot's own text, because a later shot opens `At 00:05.000, ` and a capitalised clause
   cannot continue out of that comma.
+
+- **The reference panel resizes, and the images grow with it.** The previews were locked to
+  52px inside a fixed 148px slot — too small to judge a reference by, and with no room for
+  a second text box. The panel now has the same drag strip the prompt and global-prompt
+  panels have, its height is remembered per node, and the previews row is the only part
+  that flexes, so every pixel gained goes to the image rather than to the text.
+
+- **`overall_soundscape`, `non_diegetic_music` and the new `summary` box sit beside the
+  global prompt, not on top of it.** The strip was absolutely positioned over the textarea,
+  which was shortened by a hard-coded `calc()` to compensate — so the two fought over the
+  same space and the strip sat on the box's own border. As a flex sibling the panel divides
+  itself, with no second copy of the height to keep in step.
+
+- **Analyze no longer assumes every slot is a character.** Its prompt said "describe the
+  character's physical appearance", which produced what you would expect when the image was
+  a coffee shop. It now asks about the slot's actual kind — a place, a garment, a pose —
+  and returns the description and the retained sentence together. A model that ignores the
+  two-line format still works: everything falls back to the description, and a note written
+  by hand is never overwritten.
 
 - **The chain node and the Director now share one reference loader.** The chain had grown
   its own copy that ignored the `ref_images` socket entirely and never fitted a keyframe to
