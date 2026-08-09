@@ -38,6 +38,12 @@ const GLOBAL_PROP_MIN_H = GLOBAL_PROMPT_MIN_H + SOUND_ROW_HEIGHT;  // prompt box
 // The per-reference "describes / retained" strip in the segment properties panel, built
 // the same way. Hiding it with display:none gives the prompt box its height straight back.
 const REF_NOTE_ROW_HEIGHT = 66;
+// start / frames / size for a reference video. Reference frames are VAE-encoded whole and
+// their latents ride through every sampling step, so a long or large clip is the usual
+// cause of an out-of-memory render — and until now the only way to shorten one was to drag
+// its edge on the track, with nothing anywhere saying what it currently was.
+const REF_LIMITS_ROW_HEIGHT = 30;
+const REF_VIDEO_SIZES = [768, 640, 512, 384, 256];   // mirrors minimax_plan.REF_VIDEO_SIZES
 const PROP_MIN_H = 90;                                             // prompt box alone
 const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
 
@@ -714,6 +720,13 @@ const STYLES = `
   /* same two-field shape as the sound strip, but a flex child of the properties panel
      rather than a strip docked inside the prompt box — see REF_NOTE_ROW_HEIGHT */
   .mmxd-ref-note-row { flex: 0 0 66px; width: 100%; display: flex; gap: 6px; padding: 4px 0 12px 0; box-sizing: border-box; }
+  /* start / frames / size for a reference video — the memory levers, see REF_LIMITS_ROW_HEIGHT */
+  .mmxd-ref-limits-row { flex: 0 0 30px; width: 100%; display: flex; align-items: center; gap: 10px; padding: 2px 0 4px 0; box-sizing: border-box; font-size: 10px; color: #8a8a8a; }
+  .mmxd-ref-limits-row label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .mmxd-ref-limits-row input { width: 58px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 3px; padding: 2px 4px; font-size: 10px; font-family: inherit; outline: none; box-sizing: border-box; }
+  .mmxd-ref-limits-row input:focus { border-color: #4fff8f; }
+  .mmxd-ref-limits-row .mmxd-msel { height: 20px; font-size: 10px; padding: 0 4px 0 6px; }
+  .mmxd-ref-limits-note { margin-left: auto; color: #5a5a5a; }
   .mmxd-sound-field { position: relative; flex: 1 1 0; min-width: 0; background: #1c1c1c; border: 1px solid #111; border-radius: 4px; box-sizing: border-box; }
   .mmxd-sound-field.focus-active { border-color: #888; }
   .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
@@ -3440,9 +3453,92 @@ class TimelineEditor {
     this.refNoteInput.addEventListener("input",
       () => writeRefText("refNote", this.refNoteInput.value));
 
+    // --- Reference video limits ------------------------------------------------------
+    // The two numbers that decide how much of a clip is encoded, and the resolution it is
+    // encoded at. They edit the segment's own trim and length rather than shadowing them,
+    // so the track keeps showing exactly what will be sent.
+    this.refLimitsRow = document.createElement("div");
+    this.refLimitsRow.className = "mmxd-ref-limits-row";
+    this.refLimitsRow.style.display = "none";
+
+    const limitField = (caption, title, onCommit) => {
+      const label = document.createElement("label");
+      label.textContent = caption;
+      label.title = title;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "0";
+      input.step = "1";
+      input.title = title;
+      const commit = () => {
+        const list = this.getSegmentArray(this.selectionType);
+        const target = list && list[this.selectedIndex];
+        if (!target) return;
+        onCommit(target, Math.max(0, Math.round(parseFloat(input.value) || 0)));
+        this.commitChanges(true);
+        this.render();
+        this.updateUIFromSelection();
+        if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+      };
+      input.addEventListener("change", commit);
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();                       // the canvas eats arrows and Delete
+        if (e.key === "Enter") input.blur();
+      });
+      label.appendChild(input);
+      this.refLimitsRow.appendChild(label);
+      return input;
+    };
+
+    this.refStartInput = limitField("start", "First frame taken from the source clip.",
+      (seg, value) => {
+        const source = seg.videoDurationFrames || 0;
+        seg.trimStart = source ? Math.min(value, Math.max(0, source - 1)) : value;
+        // never let the trim run past the end of the source
+        if (source) seg.length = Math.max(1, Math.min(seg.length, source - seg.trimStart));
+      });
+
+    this.refFramesInput = limitField("frames",
+      "How many frames are encoded. Fewer frames is less memory, and at 24 fps this is "
+      + "the clip's length in the video.",
+      (seg, value) => {
+        const source = seg.videoDurationFrames || 0;
+        let next = Math.max(1, value);
+        if (source) next = Math.min(next, Math.max(1, source - (seg.trimStart || 0)));
+        // stop short of the next clip on the track rather than overlapping it
+        const later = (this.timeline.motionSegments || [])
+          .filter(s => s.id !== seg.id && s.start > seg.start)
+          .sort((a, b) => a.start - b.start)[0];
+        if (later) next = Math.min(next, Math.max(1, later.start - seg.start));
+        seg.length = next;
+      });
+
+    this.refSizeSelect = createMenuSelect(
+      REF_VIDEO_SIZES.map(v => ({ value: String(v), label: `${v}px` })), { width: "76px" });
+    this.refSizeSelect.title =
+      "Short edge the clip is decoded at. Memory goes with the square of this, so it is "
+      + "the biggest lever on an out-of-memory render — 384 is about a quarter of 768.";
+    this.refSizeSelect.addEventListener("change", () => {
+      const list = this.getSegmentArray(this.selectionType);
+      const target = list && list[this.selectedIndex];
+      if (!target) return;
+      target.refSize = parseInt(this.refSizeSelect.value, 10);
+      this.commitChanges(true);
+    });
+    const sizeLabel = document.createElement("label");
+    sizeLabel.textContent = "size";
+    sizeLabel.appendChild(this.refSizeSelect);
+    this.refLimitsRow.appendChild(sizeLabel);
+
+    this.refLimitsNote = document.createElement("span");
+    this.refLimitsNote.className = "mmxd-ref-limits-note";
+    this.refLimitsRow.appendChild(this.refLimitsNote);
+
     propContainer.appendChild(this.promptWrapper);
     propContainer.appendChild(this.motionInfoArea);
     propContainer.appendChild(this.audioInfoArea);
+    propContainer.appendChild(this.refLimitsRow);
     propContainer.appendChild(this.refNoteRow);
     propContainer.appendChild(propResizer);
 
@@ -5884,8 +5980,37 @@ class TimelineEditor {
   // The properties panel has to hold the prompt box *and*, when a reference is selected,
   // the note strip. Without this the default 90px panel would leave the prompt box 24px.
   _propMinH() {
-    const showing = this.refNoteRow && this.refNoteRow.style.display !== "none";
-    return PROP_MIN_H + (showing ? REF_NOTE_ROW_HEIGHT : 0);
+    const notes = this.refNoteRow && this.refNoteRow.style.display !== "none";
+    const limits = this.refLimitsRow && this.refLimitsRow.style.display !== "none";
+    return PROP_MIN_H + (notes ? REF_NOTE_ROW_HEIGHT : 0)
+                      + (limits ? REF_LIMITS_ROW_HEIGHT : 0);
+  }
+
+  // The reference-video limits, shown only for a clip on the reference-video track.
+  // Frames and start edit the segment itself, so the track keeps showing what will be sent.
+  _syncRefLimitsRow(seg) {
+    if (!this.refLimitsRow) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    if (!seg || this.selectionType !== "motion" || !refsOn || this.retakeMode) {
+      this.refLimitsRow.style.display = "none";
+      return;
+    }
+    this.refLimitsRow.style.display = "flex";
+
+    const fps = this.getFrameRate() || 24;
+    const frames = Math.max(1, Math.round(seg.length || 1));
+    this.refStartInput.value = Math.max(0, Math.round(seg.trimStart || 0));
+    this.refFramesInput.value = frames;
+    this.refSizeSelect.value = String(seg.refSize || REF_VIDEO_SIZES[0]);
+
+    // What this clip actually costs, in the terms that matter: seconds against the model
+    // card's 2-15s window, and whether it is the one blowing the memory budget.
+    const secs = frames / fps;
+    const parts = [`${secs.toFixed(1)}s`];
+    if (secs < 2) parts.push("under the 2s minimum");
+    else if (secs > 15) parts.push("over the 15s maximum");
+    this.refLimitsNote.textContent = parts.join(" · ");
+    this.refLimitsNote.style.color = (secs < 2 || secs > 15) ? "#d08a3a" : "#5a5a5a";
   }
 
   // Opens the panel far enough that showing the strip does not squeeze the prompt box to
@@ -5984,8 +6109,9 @@ class TimelineEditor {
       if (this.segmentBoundsDisplay) {
         this.segmentBoundsDisplay.textContent = "Multiple Segments Selected";
       }
-      // there is no single reference to annotate, and leaving the strip up would show
-      // the previously selected segment's text as if it belonged to this selection
+      // there is no single reference to annotate, and leaving these up would show the
+      // previously selected segment's values as if they belonged to this selection
+      this._syncRefLimitsRow(null);
       this._syncRefNoteRow(null);
       return;
     }
@@ -6034,8 +6160,9 @@ class TimelineEditor {
       this.promptInput.style.opacity = "";
     }
 
-    // Set once here rather than in each branch below: the strip belongs to the selected
+    // Set once here rather than in each branch below: these belong to the selected
     // segment, not to whichever of the prompt box / motion info / audio info is on show.
+    this._syncRefLimitsRow(seg);
     this._syncRefNoteRow(seg);
 
     if (this.retakeMode) {

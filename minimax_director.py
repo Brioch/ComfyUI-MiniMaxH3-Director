@@ -498,9 +498,22 @@ class MiniMaxH3Director(io.ComfyNode):
                 seg_len = float(seg.get("length", 1))
                 offset = max(0.0, win_start - seg_start)
                 trim = float(seg.get("trimStart", 0)) + offset
-                clip_sec = min(plan.REF_VIDEO_MAX_SEC,
-                               max(plan.REF_VIDEO_MIN_SEC, (seg_len - offset) / fps))
-                frames = media.load_video_tensor(seg["videoFile"], trim / fps, clip_sec)
+                # The segment's own length is the answer, capped only at the model card's
+                # ceiling. It used to be floored at 2s as well, which meant trimming a clip
+                # shorter than that silently handed the VAE *more* than was asked for —
+                # the opposite of what someone trimming it down is trying to do. The
+                # planner already warns when a clip is under the card's 2s minimum.
+                clip_sec = min(plan.REF_VIDEO_MAX_SEC, (seg_len - offset) / fps)
+                # Reference frames are VAE-encoded whole and then ride through every
+                # sampling step, so their resolution is the largest single lever on memory:
+                # halving the short edge is roughly a quarter of the footprint. Per clip,
+                # because one reference may be carrying a look worth the pixels while
+                # another is only carrying a camera move.
+                short_edge = int(seg.get("refSize") or plan.REF_VIDEO_SHORT_EDGE)
+                frames = media.load_video_tensor(
+                    seg["videoFile"], trim / fps, clip_sec,
+                    max_short_edge=short_edge,
+                    max_pixels=int(short_edge * short_edge * plan.REF_VIDEO_ASPECT_BUDGET))
                 if frames.shape[0] < 5:
                     log.warning("[MiniMaxDirector] Reference video '%s' is shorter than 5 "
                                 "frames — skipped.", seg.get("fileName", seg["videoFile"]))

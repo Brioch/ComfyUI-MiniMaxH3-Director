@@ -265,6 +265,39 @@ These are enforced, with a warning naming exactly what was dropped:
 
 Output envelope: 4–15 s at 24 fps. Aspect ratios 21:9, 16:9, 4:3, 1:1, 3:4, 9:16.
 
+### When a reference video runs you out of memory
+
+A reference video is the most expensive thing you can put on the timeline. Its frames are
+VAE-encoded **whole**, and the resulting latents then ride through every sampling step — so
+cost scales with frames × width × height, and a long or large clip is the usual cause of an
+OOM render.
+
+Select the clip on the reference-video track and the properties panel gives you the three
+numbers that matter:
+
+| Field | Effect |
+|---|---|
+| **start** | First frame taken from the source. Lets you use the interesting middle of a clip without paying for the run-up. |
+| **frames** | How many frames are encoded — linear on memory. At 24 fps this is also the clip's length, so the panel shows the seconds beside it and flags the model card's 2–15 s window. |
+| **size** | Short edge it is decoded at. **The biggest lever**: memory goes with the square, so 384 costs about a quarter of 768. |
+
+Rough figures for a 5 s output (124 frames), pixel data alone, before VAE activations:
+
+| size | per frame | 124 frames |
+|---|---|---|
+| 768 (default) | 1.03 MP | ~1.5 GB |
+| 512 | 0.46 MP | ~683 MB |
+| 384 | 0.26 MP | ~384 MB |
+| 256 | 0.11 MP | ~171 MB |
+
+Try **size** first — a `<Video k>` contributes movement and camera work, which survives a
+lower resolution far better than a character's face would. Nothing changes unless you turn
+it down; the default is exactly what the node used before.
+
+**Do not** expect a lower frame rate to help: H3 reads reference video at 24 fps and stamps
+its own timestamps on that basis, so feeding it fewer frames per second would tell the
+model the motion is faster than it is. Frames and duration are the same dial.
+
 **Video formats**: anything your ComfyUI can decode. The editor previews a reference video
 in the browser, which is fussier than the renderer — HEVC, ProRes and 10-bit footage inside
 an ordinary `.mp4` or `.mov` are commonly refused. When that happens the server reads the

@@ -142,6 +142,25 @@ than that, and two of its sections were structurally missing from the output.
   state here, and warning about it fired on essentially every timeline — which is how a
   warnings area stops being read at all. Only overshooting the range is called out.
 
+- **Reference videos can be turned down when they run you out of memory.** Their frames are
+  VAE-encoded whole and the latents ride through every sampling step, so a long or large
+  clip is the usual cause of an OOM render — and the only way to shorten one was to drag
+  its edge on the track, with nothing anywhere saying what it currently was. Selecting a
+  clip now gives **start**, **frames** and **size** as numbers, with the seconds and the
+  model card's 2–15 s window shown beside them.
+
+  `start` and `frames` edit the segment's own trim and length rather than shadowing them,
+  so the track keeps showing exactly what will be sent. `size` is the short edge the clip
+  is decoded at, per clip because one reference may be carrying a look worth the pixels
+  while another is only carrying a camera move — and it is the biggest lever there is,
+  since memory goes with its square. The default is unchanged, so nothing moves until you
+  turn it down.
+
+- **A trimmed reference video is no longer silently lengthened.** The loader floored every
+  clip at 2 s, so trimming one shorter handed the VAE *more* than was asked for — while the
+  preview warned that the clip was under the model card's minimum. It warns and honours the
+  trim now, rather than warning and overriding it.
+
 - **A reference video the browser cannot decode now works anyway.** The editor built the
   clip from a local blob through a `<video>` element, so it only accepted what the browser
   accepts — and a browser accepts far less than the renderer does. HEVC, ProRes and 10-bit

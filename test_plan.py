@@ -758,6 +758,27 @@ check("split_audio_music leaves a prompt without labels alone",
 check("split_audio_music takes a label only at the start of a line",
       plan.split_audio_music("a car with no audio: here")[1], "")
 
+# ------------------------------------------------- reference video decode budget
+# Reference frames are VAE-encoded whole and ride through every sampling step, so the
+# decode size is the biggest lever on an out-of-memory render. Lowering the short edge has
+# to scale the area with it, not square it away.
+check("the default budget is exactly the native canvas",
+      int(plan.REF_VIDEO_SHORT_EDGE ** 2 * plan.REF_VIDEO_ASPECT_BUDGET), 768 * 1344)
+check("halving the short edge quarters the pixel budget",
+      round((384 ** 2) / (768 ** 2), 3), 0.25)
+check("the offered sizes start at the native canvas and only go down",
+      (plan.REF_VIDEO_SIZES[0],
+       list(plan.REF_VIDEO_SIZES) == sorted(plan.REF_VIDEO_SIZES, reverse=True)),
+      (plan.REF_VIDEO_SHORT_EDGE, True))
+# The loader now honours a trim shorter than the model card's 2s instead of quietly
+# extending it back up — so the warning is the only thing left saying it is short.
+check_in("a clip trimmed under 2s is reported, not silently extended",
+         "H3 wants 2-15s per clip",
+         " ".join(compile(tl([], ref_mode="ON",
+                             motionSegments=[{"videoFile": "v.mp4", "fileName": "v.mp4",
+                                              "start": 0, "length": 24}])
+                          )["ref_warnings"]))
+
 # ---------------------------------------------------------------- comfyui format
 cf = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON",
                 prompt_format="comfyui"))

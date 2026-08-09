@@ -30,6 +30,13 @@ MAX_REF_FILES = 12          # "at most 12 files in total across all input types"
 REF_VIDEO_MIN_SEC = 2.0     # "each clip must be 2-15 seconds long"
 REF_VIDEO_MAX_SEC = 15.0
 REF_VIDEO_TOTAL_SEC = 15.0  # "total duration <= 15 seconds"
+# Decode bound for a reference video. Its frames are VAE-encoded whole and the resulting
+# latents ride through every sampling step, so this is the biggest lever on memory there
+# is — memory goes with the square of the short edge. 768 x 1344 is the native canvas;
+# the ratio is kept so a lowered cap scales the area with it instead of squaring it away.
+REF_VIDEO_SHORT_EDGE = 768
+REF_VIDEO_ASPECT_BUDGET = 1344 / 768.0
+REF_VIDEO_SIZES = (768, 640, 512, 384, 256)
 # Output envelope: "4-15 seconds" at 24 fps
 TRAINED_MIN_FRAMES = 96
 TRAINED_MAX_FRAMES = 360
