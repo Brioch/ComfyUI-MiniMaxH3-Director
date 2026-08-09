@@ -30,14 +30,22 @@ than that, and two of its sections were structurally missing from the output.
   because copying a signal and imitating one are different jobs. An off-spec value coming
   from an edited timeline is clamped rather than passed through into the prompt.
 
-- **The sentence after the marker is yours to write.** The guide's own retention lines name
-  actual features rather than a stock phrase — `fully_preserved - the Samoyed's thick white
-  fur, pointed ears, dark nose, and curved tail are retained`. Every reference has a
-  **retained** box for that: subject slots in the panel, timeline images, reference videos
-  and audio clips in the properties panel. Left empty, a sentence is generated from the
-  reference's kind, so the box overrides and never obliges. Subject slots and
-  subject-defining images carry two boxes, because they feed two different sections:
-  **describes** becomes the `<Subject N>` definition, **retained** the retention line.
+- **Both sentences about a reference are yours to write.** The guide's lines name actual
+  features rather than stock phrases — `fully_preserved - the Samoyed's thick white fur,
+  pointed ears, dark nose, and curved tail are retained` — and name relationships the
+  timeline cannot work out, like `<Audio 1> is the voice-timbre reference for <Subject 1>
+  (S1)`. Every reference therefore has up to two boxes, one per section it feeds:
+
+  | Box | Becomes |
+  |---|---|
+  | **describes** | the reference's line in `subject_definitions` — what it *is* |
+  | **retained** | the sentence after the marker in `retention_analysis` — what *survives* |
+
+  Subject slots carry both in the panel; timeline images, reference videos and audio clips
+  carry theirs in the properties panel. Either left empty falls back to the generated
+  sentence, so the boxes override and never oblige. Frame and storyboard anchors are the
+  one exception with no **describes** box: their declaration states where the image sits in
+  the video, which the timeline already knows and should not be contradicted.
 
 - **An image only gets a `<Picture N>` entry when it really is one.** The guide: "If an
   image is used only to define a character, scene, costume, or style, do not create a

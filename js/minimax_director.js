@@ -5865,11 +5865,16 @@ class TimelineEditor {
     this.refNoteRow.style.display = "flex";
     this._growPropForRefNote();
 
-    // `describes` only means something for an image that defines a subject rather than
-    // anchoring a frame — every other reference has just the one sentence.
-    const describes = this.selectionType === "image" && seg.refRole === "subject";
+    // `describes` writes the reference's line in subject_definitions. A frame or
+    // storyboard anchor is the exception: its declaration states where the image sits in
+    // the video, which the timeline already knows and the user should not contradict.
+    const describes = this.selectionType !== "image" || seg.refRole === "subject";
     this.refDescField.style.display = describes ? "" : "none";
     if (describes) this.refDescInput.value = seg.refDesc || "";
+    this.refDescInput.placeholder = {
+      audio: "e.g. the voice-timbre reference for <Subject 1>",
+      motion: "e.g. the source of the camera move and cut rhythm",
+    }[this.selectionType] || "what this image defines, e.g. a long red wool coat";
     this.refNoteInput.value = seg.refNote || "";
     this.refNoteInput.placeholder = this.selectionType === "audio"
       ? "what the target keeps from this audio — leave empty for the default"

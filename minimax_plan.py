@@ -324,6 +324,22 @@ def _subject_sentence(label, description, kind, pictures):
     return "%s is %s shown in %s." % (label, SUBJECT_KINDS[kind], pictures)
 
 
+def _declaration(label, written, generated):
+    """`<Label> is <what the user wrote>.`, or the generated sentence when nothing was.
+
+    The label is prepended rather than expected in the text, so what gets typed is the
+    predicate — "the voice-timbre reference for <Subject 1> (S1)" — and the label can
+    never end up wrong or duplicated. A sentence that already opens with its own label is
+    taken as written, since that is what someone pasting the guide's example will do.
+    """
+    text = (written or "").strip()
+    if not text:
+        return generated
+    if text.startswith(label):
+        return text if text.endswith((".", "!", "?")) else text + "."
+    return "%s is %s." % (label, text.rstrip("."))
+
+
 def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
                               ref_audio_segs):
     """Declare every reference label, and record what each needs in retention_analysis.
@@ -398,9 +414,16 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
                        "note": s.get("note", ""),
                        "where": texts["where"], "audio": False})
 
+    # A <Video N> or <Audio N> declaration is pure prose — unlike a <Picture N>, it states
+    # no structural fact the planner already knows — so a written one simply replaces it.
+    # That is the only way to reach the guide's own shapes, which name things this node
+    # cannot infer: "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)", or
+    # "<Video 1> is the source video for the target video edit".
     for i, seg in enumerate(ref_video_segs):
         label = "<Video %d>" % (i + 1)
-        lines.append("%s is a reference video: follow its motion and camera work." % label)
+        lines.append(_declaration(
+            label, seg.get("refDesc"),
+            "%s is a reference video: follow its motion and camera work." % label))
         labels.append({"label": label, "kind": "video", "audio": False,
                        "marker": sanitize_retention(seg.get("retention")),
                        "note": (seg.get("refNote") or "").strip(),
@@ -408,13 +431,15 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
     for i, seg in enumerate(ref_audio_segs):
         label = "<Audio %d>" % (i + 1)
         marker = sanitize_retention(seg.get("retention"), audio=True)
-        # the declaration has to agree with the marker: telling the model to follow a
-        # clip's timbre while retention_analysis says the signal is copied wholesale
-        # describes two different jobs
-        lines.append("%s is a reference audio clip: %s"
-                     % (label, "its signal is reused in the target video."
-                        if marker in ("fully_copy", "partially_copy")
-                        else "follow its voice and timbre."))
+        # the generated declaration has to agree with the marker: telling the model to
+        # follow a clip's timbre while retention_analysis says the signal is copied
+        # wholesale describes two different jobs
+        lines.append(_declaration(
+            label, seg.get("refDesc"),
+            "%s is a reference audio clip: %s"
+            % (label, "its signal is reused in the target video."
+               if marker in ("fully_copy", "partially_copy")
+               else "follow its voice and timbre.")))
         labels.append({"label": label, "kind": "audio", "audio": True, "marker": marker,
                        "note": (seg.get("refNote") or "").strip(), "where": ""})
 

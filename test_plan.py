@@ -395,6 +395,37 @@ check_in("the guide's own retention line can be reproduced exactly",
          "thick white fur, pointed ears, dark nose, and curved tail are retained.",
          samoyed["prompt"])
 
+# a <Video N> / <Audio N> declaration is prose, so a written one replaces it outright.
+# This is the only route to the guide's own shapes, which name things the timeline cannot
+# work out: "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)".
+spoken = compile(tl([], ref_mode="ON",
+                    subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                               "description": "a woman in a red coat"}],
+                    audioSegments=[{"audioFile": "vo.wav", "start": 0, "length": 96,
+                                    "refDesc": "the voice-timbre reference for "
+                                               "<Subject 1> (S1)"}]),
+                 use_custom_audio=True)
+check_in("an audio clip can name the speaker it belongs to",
+         "<Audio 1> is the voice-timbre reference for <Subject 1> (S1).", spoken["prompt"])
+check_not_in("its generated declaration is gone, not doubled",
+             "is a reference audio clip", spoken["prompt"])
+check_in("a reference video's declaration can be written too",
+         "<Video 1> is the source video for the target video edit.",
+         compile(tl([], ref_mode="ON",
+                    motionSegments=[{"videoFile": "v.mp4", "fileName": "v.mp4",
+                                     "start": 0, "length": 120,
+                                     "refDesc": "the source video for the target video "
+                                                "edit"}]))["prompt"])
+check("the label is prepended, so it can never be wrong or doubled",
+      plan._declaration("<Audio 1>", "the voice reference", "generated"),
+      "<Audio 1> is the voice reference.")
+check("a sentence pasted with its own label is taken as written",
+      plan._declaration("<Audio 1>", "<Audio 1> is the synchronized track of <Video 1>",
+                        "generated"),
+      "<Audio 1> is the synchronized track of <Video 1>.")
+check("nothing written falls back to the generated sentence",
+      plan._declaration("<Audio 1>", "   ", "generated"), "generated")
+
 # ------------------------------------------------- Analyze output parsing
 check("split_analysis reads both labelled lines",
       plan.split_analysis("DESCRIPTION: A fluffy white Samoyed.\n"

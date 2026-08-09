@@ -312,20 +312,31 @@ survive, and the guide's own example is specific rather than generic:
 fur, pointed ears, dark nose, and curved tail are retained.
 ```
 
-Every reference has a **retained** box for exactly that. Subject slots carry theirs in the
-panel, next to the description; timeline images, reference videos and audio clips get one
-in the properties panel when they are selected. Leave it empty and a sentence is generated
-from the reference's kind instead — so the box is an override, never an obligation.
-
-Subject slots have two boxes, because they feed two different sections of the prompt:
+Every reference has boxes for exactly that — up to two, one per section of the prompt it
+feeds:
 
 | Box | Becomes |
 |---|---|
-| **describes** | the `<Subject N>` line in `subject_definitions` — what the thing *is* |
+| **describes** | the reference's line in `subject_definitions` — what the thing *is* |
 | **retained** | the sentence after the marker in `retention_analysis` — what must *survive* |
 
-An image on the timeline set to **defines a subject** gets both boxes too. Everything else
-gets **retained** alone.
+Subject slots carry both in the panel. Timeline images, reference videos and audio clips
+carry theirs in the properties panel when selected. Leave either empty and a sentence is
+generated instead — the boxes are overrides, never obligations.
+
+**describes** is what lets you write relationships the timeline cannot work out. The guide
+links a voice reference to the speaker it belongs to:
+
+```
+<Audio 1> is the voice-timbre reference for <Subject 1> (S1).
+```
+
+Type the part after `is` — the label is added for you, so it cannot come out wrong or
+doubled. Paste a whole line that already starts with its label and it is taken as written.
+
+Frame anchors and storyboard references are the one exception: they have **retained**
+alone. Their declaration states where the image sits in the video (`<Picture 2> is the
+first frame of [Shot 1].`), which the timeline already knows.
 
 ### Resizing the panel
 
