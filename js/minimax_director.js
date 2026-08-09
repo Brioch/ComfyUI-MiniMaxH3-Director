@@ -1033,7 +1033,11 @@ function parseInitial(jsonStr) {
       }
       if (Array.isArray(p.segments)) {
         parsed.segments = p.segments.map(s => {
-          const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
+          // `isAnchor` is dropped rather than carried: the Image Anchor was an LTX
+          // concept this node never read, so an old timeline's flag is inert and would
+          // otherwise ride along in the JSON forever. Such a segment becomes an ordinary
+          // image with an empty prompt, which is what it already compiled to.
+          const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, isAnchor, ...rest } = s;
           return rest;
         });
       }
@@ -3369,8 +3373,6 @@ class TimelineEditor {
         return;
       }
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-        // Anchors never own a prompt — ignore any input against them.
-        if (this.timeline.segments[this.selectedIndex].isAnchor) return;
         this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
         this.commitChanges();
       } else if (this.selectionType === "motion") {
@@ -4490,8 +4492,7 @@ class TimelineEditor {
   }
 
   // --- Async Image Upload Logic (Handles multiple images simultaneously) ---
-  async handleImageUpload(files, targetFrameStart = null, explicitLength = null, opts = {}) {
-    const isAnchorUpload = !!opts.isAnchor;
+  async handleImageUpload(files, targetFrameStart = null, explicitLength = null) {
     const frameRate = this.getFrameRate();
     const durationFrames = this.getDurationFrames();
     const newLength = explicitLength !== null ? explicitLength : frameRate * 1; // Default to 1 second long
@@ -4573,11 +4574,6 @@ class TimelineEditor {
               length: constrainedLength,
               prompt: "",
               type: "image",
-              // Image Anchor: a guide-only keyframe. It is inserted into the latent
-              // exactly like a normal image guide (same guideStrength path), but it is
-              // EXCLUDED from the prompt-relay sync — it borrows the previous segment's
-              // prompt instead of owning one. See commitChanges() and the draw block.
-              isAnchor: isAnchorUpload,
               imageFile: imageFile,
               imageB64: imgUrl
             };
@@ -6267,16 +6263,13 @@ class TimelineEditor {
       this.vidAttnValue.style.display = "none";
 
       if (seg) {
-        const isAnchorSeg = !!seg.isAnchor;
         if (this.selectionType !== "motion") {
-          this.promptInput.value = isAnchorSeg ? "" : (seg.prompt || "");
-          this.promptInput.placeholder = isAnchorSeg
-            ? "Image Anchor — no prompt (inherits the previous segment)"
-            : "Enter prompt for selected segment...   (a line like  @ref1 says: hello  becomes dialogue)";
+          this.promptInput.value = seg.prompt || "";
+          this.promptInput.placeholder =
+            "Enter prompt for selected segment...   (a line like  @ref1 says: hello  becomes dialogue)";
         }
-        // Anchors are guide-only, so lock their prompt field but leave Guide Strength active.
-        this.promptInput.disabled = isAnchorSeg;
-        this.promptInput.style.opacity = isAnchorSeg ? "0.5" : "1.0";
+        this.promptInput.disabled = false;
+        this.promptInput.style.opacity = "1.0";
 
         const isImage = (this.selectionType === "image") && (seg.type === "image" || seg.type === "video");
         const strength = isImage ? (seg.guideStrength ?? 1.0) : 1.0;
@@ -7177,9 +7170,7 @@ class TimelineEditor {
         }
 
         if (isSelected) {
-          // Image Anchors get an orange outline so they read differently from
-          // prompt-synced segments (which stay white when selected).
-          const outlineColor = seg.isAnchor ? "#ff9d2e" : "#fff";
+          const outlineColor = "#fff";
           this.ctx.strokeStyle = outlineColor;
           this.ctx.lineWidth = 2;
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
@@ -7199,57 +7190,17 @@ class TimelineEditor {
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
         }
 
-        // Anchor glyph: drawn for anchors whether idle OR selected, so the marker
-        // stays visible on selection. Bottom-right corner, tiny dot fallback if thin.
-        if (seg.isAnchor && seg.type !== "ghost") {
-          const _anchBottom = RULER_HEIGHT + this.blockHeight;
-          if (pxWidth >= 24 && this.blockHeight > 30) {
-            const R = 9;
-            const cx = startX + pxWidth - 6 - R;
-            const cy = _anchBottom - 6 - R;
-            this.ctx.save();
-            const gs = R * 0.9;
-            this.ctx.strokeStyle = "#ffcf9b";
-            this.ctx.lineWidth = 1.2;
-            this.ctx.lineCap = "round";
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy - gs * 0.62, gs * 0.24, 0, Math.PI * 2);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx, cy - gs * 0.4);
-            this.ctx.lineTo(cx, cy + gs * 0.72);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx - gs * 0.5, cy - gs * 0.1);
-            this.ctx.lineTo(cx + gs * 0.5, cy - gs * 0.1);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy + gs * 0.05, gs * 0.62, Math.PI * 0.16, Math.PI * 0.84);
-            this.ctx.stroke();
-            this.ctx.restore();
-          } else if (pxWidth >= 6) {
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.arc(startX + pxWidth / 2, _anchBottom - 7, 2.5, 0, Math.PI * 2);
-            this.ctx.fillStyle = "rgba(255, 157, 46, 0.95)";
-            this.ctx.fill();
-            this.ctx.restore();
-          }
-        }
         this.ctx.globalAlpha = 1.0;
       }
 
       // --- Prompt zones: boundary lines (always) + zone ribbon (toggle) ---
-      // A "zone" is the span one prompt governs. Image Anchors don't own a
-      // prompt (they inherit the preceding one), so they never open a new zone;
-      // the previous prompt's zone runs straight through them. This mirrors the
-      // prompt-relay logic used at export time, so what you see is what renders.
+      // A "zone" is the span one prompt governs.
       if (totalFrames > 0 && this.blockHeight > 20) {
         const zoneSegs = sortedSegments
           .filter(s => s.type !== "ghost")
           .slice()
           .sort((a, b) => a.start - b.start);
-        const realZoneSegs = zoneSegs.filter(s => !s.isAnchor);
+        const realZoneSegs = zoneSegs;
 
         if (realZoneSegs.length > 0) {
           const zones = realZoneSegs.map((s, i) => ({
@@ -10297,25 +10248,6 @@ class TimelineEditor {
         const effectiveStart = Math.max(seg.start, startFrames);
         const clippedEnd = Math.min(seg.start + seg.length, endFrames);
 
-        // Image Anchors are guide-only: they still get inserted as a keyframe by the
-        // Python guide node (which reads them from timeline_data by type "image"), but
-        // they must NOT create their own prompt-relay segment. Absorb their timespan
-        // (and any gap before them) into the preceding prompt so it "covers" the anchor.
-        // If an anchor is the very first thing on the timeline, its span is carried
-        // forward as pendingGap into the next real prompt segment.
-        if (seg.isAnchor) {
-          const absorb = clippedEnd - currentCursor;
-          if (absorb > 0) {
-            if (contiguousLengths.length > 0) {
-              contiguousLengths[contiguousLengths.length - 1] += absorb;
-            } else {
-              pendingGap += absorb;
-            }
-          }
-          currentCursor = Math.max(currentCursor, seg.start + seg.length);
-          continue;
-        }
-
         if (effectiveStart > currentCursor) {
           const gapLength = Math.min(effectiveStart, endFrames) - currentCursor;
           if (contiguousLengths.length > 0) {
@@ -11118,30 +11050,6 @@ class TimelineEditor {
     }
 
     // ==========================================
-    // 4b. Define Convert to / from Image Anchor (image segments only)
-    // ==========================================
-    let anchorToggleBtn = null;
-    if (trackType === "image" && seg.type === "image") {
-      anchorToggleBtn = document.createElement("button");
-      anchorToggleBtn.className = "mmxd-gap-menu-btn";
-      const anchorIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>`;
-      anchorToggleBtn.innerHTML = seg.isAnchor
-        ? `${anchorIcon} Convert to Image Segment`
-        : `${anchorIcon} Convert to Image Anchor`;
-      anchorToggleBtn.onclick = () => {
-        seg.isAnchor = !seg.isAnchor;
-        this.commitChanges();
-        // If this segment is the one shown in the side panel, refresh it so the
-        // prompt box enables/disables and the strength row updates immediately.
-        if (this.selectedSegmentIds && this.selectedSegmentIds.includes(seg.id)) {
-          this.updateUIFromSelection();
-        }
-        this.render();
-        this.dismissContextMenu();
-      };
-    }
-
-    // ==========================================
     // 5. Define Unlink Media & Mark Selection options
     // ==========================================
     const isVidLink = trackType === "video" && seg.id.endsWith("_v");
@@ -11246,12 +11154,6 @@ class TimelineEditor {
       this.deleteSelectedSegment();
       this.dismissContextMenu();
     };
-
-    // Very top: Convert to / from Image Anchor (image segments only)
-    if (anchorToggleBtn) {
-      menu.appendChild(anchorToggleBtn);
-      menu.appendChild(makeDivider());
-    }
 
     // Very top: Split at Playhead (if active/available)
     if (splitBtn) {
@@ -11372,23 +11274,6 @@ class TimelineEditor {
         fi.click();
       };
       menu.appendChild(imgBtn);
-
-      const anchorBtn = document.createElement("button");
-      anchorBtn.className = "mmxd-gap-menu-btn";
-      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
-      anchorBtn.onclick = () => {
-        this.dismissContextMenu();
-        const fi = document.createElement("input");
-        fi.type = "file"; fi.accept = "image/*";
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files?.[0]) {
-            const gapLength = gap.frameEnd - gap.frameStart;
-            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
-          }
-        });
-        fi.click();
-      };
-      menu.appendChild(anchorBtn);
 
       const pasteImageBtn = document.createElement("button");
       pasteImageBtn.className = "mmxd-gap-menu-btn";
@@ -11540,25 +11425,8 @@ class TimelineEditor {
         fi.click();
       });
 
-      const anchorBtn = document.createElement("button");
-      anchorBtn.className = "mmxd-gap-menu-btn";
-      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
-      anchorBtn.addEventListener("click", () => {
-        this.dismissGapMenu();
-        const fi = document.createElement("input");
-        fi.type = "file"; fi.accept = "image/*";
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files?.[0]) {
-            const gapLength = gap.frameEnd - gap.frameStart;
-            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
-          }
-        });
-        fi.click();
-      });
-
       menu.appendChild(textBtn);
       menu.appendChild(imgBtn);
-      menu.appendChild(anchorBtn);
       menu.appendChild(vidBtn);
       menu.appendChild(pasteImageBtn);
     } else if (currentTrack === "motion") {

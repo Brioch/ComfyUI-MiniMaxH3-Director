@@ -161,6 +161,15 @@ than that, and two of its sections were structurally missing from the output.
   preview warned that the clip was under the model card's minimum. It warns and honours the
   trim now, rather than warning and overriding it.
 
+- **Removed the Image Anchor.** An LTX concept that survived the port without ever being
+  connected to anything: `isAnchor` was written by the editor, round-tripped through the
+  timeline JSON, and read nowhere in Python — H3 has no per-keyframe guide strength for it
+  to drive. Its only observable effect was locking your prompt box and drawing an orange
+  glyph, so it looked like a feature while doing nothing but taking a field away. Old
+  timelines load unchanged; such a segment becomes an ordinary image with an empty prompt,
+  which is exactly what it already compiled to, and the flag is dropped on load rather than
+  riding along in the JSON forever.
+
 - **A reference video the browser cannot decode now works anyway.** The editor built the
   clip from a local blob through a `<video>` element, so it only accepted what the browser
   accepts — and a browser accepts far less than the renderer does. HEVC, ProRes and 10-bit
