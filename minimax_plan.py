@@ -15,6 +15,7 @@ actually sent would be worse than no preview.
 
 import json
 import logging
+import re
 
 log = logging.getLogger(__name__)
 
@@ -574,7 +575,7 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
     if retention_lines:
         parts.append("retention_analysis:\n" + "\n".join(retention_lines))
 
-    written = [s for s in shots if (s["prompt"] or "").strip()]
+    written = [s for s in shots if shot_has_text(s)]
     body = []
     gp = (global_prompt or "").strip()
     if gp:
@@ -587,9 +588,23 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
         # a capitalised "The shot begins from…" cannot do.
         phrases = " ".join(shot.get("ref_phrases") or [])
         if phrases:
-            if not text.endswith((".", "!", "?", ",", ";", ":")):
+            if text:
+                if not text.endswith((".", "!", "?", ",", ";", ":")):
+                    text += "."
+                text = "%s %s" % (text, phrases)
+            elif index:
+                # nothing of the user's own to open on, and a later shot opens
+                # "At 00:05.000, " — so our own sentence has to continue out of that comma
+                text = phrases[0].lower() + phrases[1:]
+            else:
+                text = phrases
+        # the guide's example ends a shot on its spoken line, after the action that
+        # motivates it
+        spoken = (shot.get("dialogue_text") or "").strip()
+        if spoken:
+            if text and not text.endswith((".", "!", "?")):
                 text += "."
-            text = "%s %s" % (text, phrases)
+            text = ("%s %s" % (text, spoken)).strip()
         if index == 0:
             body.append("[Shot 1] %s" % text)
         else:
@@ -643,6 +658,101 @@ def split_audio_music(text):
         if stripped:
             current.append(stripped)
     return "\n".join(kept).strip(), " ".join(sound).strip(), " ".join(music).strip()
+
+
+# A dialogue line in a shot prompt. Same rule as split_audio_music: it only counts at the
+# start of a line, so prose that merely contains an @ref tag or a colon is left alone.
+#
+#   @ref1 exclaims with light annoyance: Hey! Watch your dog!
+#   @ref1 [French] murmure: Bonjour
+#   @voice(a low male narrator) says: In the beginning...
+#   @audio2: the chorus line carried by the track itself
+#
+# The clause between the tag and the colon is the delivery, kept verbatim — the guide's own
+# example carries the performance there ("says in a casual young male voice with a playful
+# tone"), and generating a flat "says" would throw that away.
+DIALOGUE_RE = re.compile(
+    r"^@(?:ref(?P<slot>\d+)|voice\((?P<voice>[^)]*)\)|audio(?P<audio>\d+))"
+    r"\s*(?:\[(?P<lang>[^\]]+)\])?"
+    r"\s*(?P<delivery>[^:]*):\s*(?P<line>.+)$", re.IGNORECASE)
+
+DIALOGUE_DEFAULT_LANG = "English"
+DIALOGUE_DEFAULT_DELIVERY = "says"
+
+SPEAKER_ID_RE = re.compile(r"\(S\d+\)")
+
+# "Generation tasks typically span 350-500 words". The floor is only worth mentioning once
+# a timeline is a real storyboard — firing it on a two-shot test would be noise, and the
+# guide itself warns against "mechanical word-count adherence".
+DESCRIPTION_MIN_WORDS = 350
+DESCRIPTION_MAX_WORDS = 500
+DESCRIPTION_MIN_SHOTS = 3
+
+
+def split_dialogue(text):
+    """Lift `@ref1 says: …` lines out of a shot prompt into structured vocal events.
+
+    Returns (remaining prose, events). Speaker IDs are deliberately *not* assigned here:
+    the guide numbers them "according to the order of actual vocal events in the target
+    video", which is a property of the whole timeline, not of one shot.
+    """
+    if not text:
+        return text or "", []
+    kept, events = [], []
+    for line in text.splitlines():
+        match = DIALOGUE_RE.match(line.strip())
+        if not match:
+            kept.append(line)
+            continue
+        events.append({
+            "slot": int(match.group("slot")) if match.group("slot") else None,
+            "voice": (match.group("voice") or "").strip() or None,
+            "audio": int(match.group("audio")) if match.group("audio") else None,
+            "language": (match.group("lang") or DIALOGUE_DEFAULT_LANG).strip(),
+            "delivery": (match.group("delivery") or "").strip() or DIALOGUE_DEFAULT_DELIVERY,
+            "line": match.group("line").strip(),
+        })
+    return "\n".join(kept).strip(), events
+
+
+def shot_has_text(shot):
+    """Does this shot appear in the body, and therefore carry a [Shot N] number?
+
+    A shot whose only content is dialogue still counts. Testing the prompt alone would
+    drop it from the body once the dialogue was lifted out — losing the line and shifting
+    every later shot number, including the ones picture notes point at.
+    """
+    return bool((shot.get("prompt") or "").strip() or shot.get("dialogue"))
+
+
+def assign_speakers(shots, label_for_slot):
+    """Number speakers across the timeline and render each line the way the guide asks.
+
+    `(Sx)` is assigned once per speaker, in the order vocal events actually occur, and
+    reused at every later event by that speaker — so the same person keeps one ID across
+    cuts, exactly as <Subject N> does. Verbal content carried by reused audio names
+    <Audio N> as its source and gets no ID at all: the guide is explicit that a cue inside
+    a soundtrack has no independent vocal source to number.
+    """
+    ids = {}
+    for shot in shots:
+        rendered = []
+        for event in shot.get("dialogue") or []:
+            tag = "<d>[%s] %s</d>" % (event["language"], event["line"])
+            if event["audio"]:
+                rendered.append("<Audio %d> carries %s" % (event["audio"], tag))
+                continue
+            if event["slot"]:
+                who = label_for_slot(event["slot"]) or "an unnamed speaker"
+                key = ("slot", event["slot"])
+            else:
+                who = event["voice"] or "an unnamed speaker"
+                key = ("voice", who.strip().lower())
+            if key not in ids:
+                ids[key] = len(ids) + 1
+            rendered.append("%s (S%d) %s, %s" % (who, ids[key], event["delivery"], tag))
+        shot["dialogue_text"] = " ".join(rendered)
+    return ids
 
 
 ANALYSIS_DESC_PREFIX = "description:"
@@ -700,7 +810,13 @@ def split_analysis(text):
 
 def compile_storyboard(global_prompt, shots, total_seconds):
     """Global block, then timed shot lines in the ComfyUI templates' `[0s-1.5s]` notation."""
-    written = [s for s in shots if (s["prompt"] or "").strip()]
+    written = [s for s in shots if shot_has_text(s)]
+
+    # Dialogue was lifted out of the prompt before this format ever saw it, so it has to be
+    # put back or a spoken line would vanish from a comfyui-format prompt entirely.
+    def body(shot):
+        parts = [(shot["prompt"] or "").strip(), (shot.get("dialogue_text") or "").strip()]
+        return " ".join(p for p in parts if p)
 
     parts = []
     gp = (global_prompt or "").strip()
@@ -711,11 +827,10 @@ def compile_storyboard(global_prompt, shots, total_seconds):
             written[0]["end_sec"] >= total_seconds - 0.01:
         # One shot covering the whole window is just a prompt — wrapping it in
         # storyboard syntax would imply a cut that isn't there.
-        parts.append(written[0]["prompt"].strip())
+        parts.append(body(written[0]))
     elif written:
         parts.append("Timeline:\n" + "\n".join(
-            "[%s-%s] %s" % (fmt_seconds(s["start_sec"]), fmt_seconds(s["end_sec"]),
-                            s["prompt"].strip())
+            "[%s-%s] %s" % (fmt_seconds(s["start_sec"]), fmt_seconds(s["end_sec"]), body(s))
             for s in written))
 
     return "\n\n".join(parts).strip()
@@ -816,7 +931,9 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 if overlaps(seg, win_start, win_end) and (seg.get("prompt") or "").strip():
                     text = seg["prompt"]
                     break
-        shots.append({"prompt": text, "start_sec": 0.0, "end_sec": window_seconds})
+        text, spoken = split_dialogue(text)
+        shots.append({"prompt": text, "dialogue": spoken,
+                      "start_sec": 0.0, "end_sec": window_seconds})
     else:
         segments = [s for s in (tdata.get("segments", []) or [])
                     if overlaps(s, win_start, win_end)]
@@ -826,7 +943,10 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             seg_len = float(seg.get("length", 1))
             rel_start = max(0.0, seg_start - win_start)
             rel_end = min(float(duration_frames), seg_start + seg_len - win_start)
-            shots.append({"prompt": seg.get("prompt", "") or "",
+            # dialogue is lifted before anything else touches the text, so a shot
+            # whose whole content is a spoken line still becomes a numbered shot
+            prose, spoken = split_dialogue(seg.get("prompt", "") or "")
+            shots.append({"prompt": prose, "dialogue": spoken,
                           "start_sec": rel_start / fps, "end_sec": rel_end / fps})
 
             kind = seg.get("type", "image")
@@ -895,7 +1015,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         written_shot_no = {}
         counted = 0
         for shot_i, shot in enumerate(shots):
-            if (shot["prompt"] or "").strip():
+            if shot_has_text(shot):
                 counted += 1
                 written_shot_no[shot_i] = counted
 
@@ -1011,6 +1131,11 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     for shot in shots:
         shot["prompt"] = substitute_char_tags(shot["prompt"], char_tag_values)
 
+    # Rendered here, after the tags resolve to their labels and before the shot text is
+    # read back for `(appears in [Shot N])` — a subject that only ever speaks still
+    # appears in the shots where it speaks.
+    speaker_ids = assign_speakers(shots, lambda slot: char_tag_values.get(slot))
+
     if prompt_format == FORMAT_MINIMAX:
         # the guide keeps the soundtrack out of the shot description
         global_prompt, found_audio, found_music = split_audio_music(global_prompt)
@@ -1031,15 +1156,24 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         subject_shots = {}
         written_no = 0
         for shot in shots:
-            if not (shot["prompt"] or "").strip():
+            if not shot_has_text(shot):
                 continue
             written_no += 1
+            # dialogue counts: a subject that only ever speaks still appears in that shot
+            body = "%s %s" % (shot["prompt"] or "", shot.get("dialogue_text") or "")
             for entry in ref_labels:
                 num = entry.get("subject")
-                if num and entry["label"] in shot["prompt"]:
+                if num and entry["label"] in body:
                     subject_shots.setdefault(num, []).append(written_no)
 
         retention_lines = build_retention_analysis(ref_labels, subject_shots)
+        # "Do not write (Sx) in retention_analysis" — the IDs belong to vocal events in
+        # detailed_description. Only a hand-written note can put one here, so say so
+        # rather than quietly editing what was typed.
+        if any(SPEAKER_ID_RE.search(line) for line in retention_lines):
+            ref_warnings.append(
+                "A speaker ID (Sx) appears in retention_analysis; the guide reserves those "
+                "for detailed_description.")
 
         # guide 5.3: name the frame anchor inside the shot as well as declaring it above
         for ordinal, texts in pic_texts.items():
@@ -1059,7 +1193,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         # instruction line. `written` mirrors the shot numbering the body will use.
         instruction = ""
         if not ref_mode_on:
-            written_shots = len([s for s in shots if (s["prompt"] or "").strip()])
+            written_shots = len([s for s in shots if shot_has_text(s)])
             instruction = alignment_instruction(
                 any(e["role"] == ROLE_FIRST for e in events),
                 any(e["role"] == ROLE_LAST for e in events),
@@ -1067,6 +1201,23 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         prompt = compile_storyboard_minimax(global_prompt, shots, soundscape, music,
                                             subject_lines, retention_lines, instruction,
                                             summary_line)
+
+        # Length guidance, measured on detailed_description alone — the label blocks and
+        # the sound sections are not what the guide is counting.
+        written_shots = [s for s in shots if shot_has_text(s)]
+        words = len(global_prompt.split()) + sum(
+            len(("%s %s" % (s["prompt"] or "", s.get("dialogue_text") or "")).split())
+            for s in written_shots)
+        if words > DESCRIPTION_MAX_WORDS:
+            ref_warnings.append(
+                "detailed_description is about %d words; the guide suggests %d-%d for "
+                "generation tasks." % (words, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
+        elif words and words < DESCRIPTION_MIN_WORDS \
+                and len(written_shots) >= DESCRIPTION_MIN_SHOTS:
+            ref_warnings.append(
+                "detailed_description is about %d words across %d shots; the guide suggests "
+                "%d-%d for generation tasks."
+                % (words, len(written_shots), DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
     else:
         prompt = compile_storyboard(global_prompt, shots, window_seconds)
         if ref_notes:

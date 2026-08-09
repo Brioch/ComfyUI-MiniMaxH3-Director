@@ -112,6 +112,34 @@ than that, and two of its sections were structurally missing from the output.
   two-line format still works: everything falls back to the description, and a note written
   by hand is never overwritten.
 
+- **Speakers and dialogue.** The guide gives speakers stable `(Sx)` IDs "according to the
+  order of actual vocal events in the target video" and wraps their lines in
+  `<d>[Language] …</d>`. Neither existed here. A line that starts with a reference tag and
+  contains a colon is now dialogue — the same "only at the start of a line" rule the
+  `Audio:` / `Music:` lines already follow:
+
+  ```
+  @ref1 exclaims with light annoyance: Hey! Watch your dog!
+  →  <Subject 1> (S1) exclaims with light annoyance, <d>[English] Hey! Watch your dog!</d>
+  ```
+
+  The clause between tag and colon is the delivery, kept verbatim — the guide's example
+  carries the performance there, and a generated "says" would throw it away. IDs are never
+  written by hand: they are assigned in vocal-event order, reused by the same speaker at
+  every later line, and kept out of `retention_analysis`, which the guide forbids.
+  `@voice(a low male narrator)` covers a speaker with no panel slot, keyed on the
+  description so repeats keep one ID. `@audio2:` names a line carried by a reused track and
+  gets no ID at all, since a cue inside a soundtrack has no independent vocal source.
+
+  A shot whose only content is a spoken line is still a numbered shot — testing the prompt
+  alone would have dropped it once the dialogue was lifted out, losing the line and
+  shifting every later shot number, including the ones picture notes point at.
+
+- **Two more checks against the guide, reported in the live preview**: a speaker ID written
+  into a retention note, and a `detailed_description` outside the guide's 350–500 words.
+  The short-side warning waits for a third shot, since the guide warns against "mechanical
+  word-count adherence" and nagging a two-shot test would be noise.
+
 - **The chain node and the Director now share one reference loader.** The chain had grown
   its own copy that ignored the `ref_images` socket entirely and never fitted a keyframe to
   the canvas, so a chained render silently dropped references the Director would have sent.

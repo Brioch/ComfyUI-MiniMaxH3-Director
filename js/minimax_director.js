@@ -6090,7 +6090,7 @@ class TimelineEditor {
           this.promptInput.value = isAnchorSeg ? "" : (seg.prompt || "");
           this.promptInput.placeholder = isAnchorSeg
             ? "Image Anchor — no prompt (inherits the previous segment)"
-            : "Enter prompt for selected segment...";
+            : "Enter prompt for selected segment...   (a line like  @ref1 says: hello  becomes dialogue)";
         }
         // Anchors are guide-only, so lock their prompt field but leave Guide Strength active.
         this.promptInput.disabled = isAnchorSeg;

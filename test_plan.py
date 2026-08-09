@@ -1,6 +1,7 @@
 """Offline checks for minimax_plan.py — the whole planner, no server, no pixels.
 
-`minimax_plan` imports nothing but json and logging on purpose, so this runs anywhere:
+`minimax_plan` imports nothing outside the standard library on purpose, so this runs
+anywhere:
 
     python test_plan.py
 
@@ -12,6 +13,7 @@ Run it after any change to minimax_plan.py, before committing.
 """
 import importlib.util
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -425,6 +427,101 @@ check("a sentence pasted with its own label is taken as written",
       "<Audio 1> is the synchronized track of <Video 1>.")
 check("nothing written falls back to the generated sentence",
       plan._declaration("<Audio 1>", "   ", "generated"), "generated")
+
+# ------------------------------------------------- speakers and dialogue
+# Guide 5.1 and 5.4: speakers carry stable (Sx) IDs assigned by the order of actual vocal
+# events in the target video, reused at every later event; dialogue sits inside
+# <d>[Language] ...</d>; and a cue inside reused audio names <Audio N> with no invented ID.
+prose, spoken = plan.split_dialogue(
+    "she jerks her hand back\n@ref1 exclaims with light annoyance: Hey! Watch your dog!")
+check("dialogue is lifted out of the prose", prose, "she jerks her hand back")
+check("the tag, delivery and line are read apart",
+      (spoken[0]["slot"], spoken[0]["delivery"], spoken[0]["line"]),
+      (1, "exclaims with light annoyance", "Hey! Watch your dog!"))
+check("English is the default language", spoken[0]["language"], "English")
+check("a bare tag still speaks",
+      plan.split_dialogue("@ref2: Hello")[1][0]["delivery"], plan.DIALOGUE_DEFAULT_DELIVERY)
+check("a language can be named",
+      [(e["language"], e["line"]) for e in
+       plan.split_dialogue("@ref1 [French] murmure: Bonjour")[1]],
+      [("French", "Bonjour")])
+check("a tag mid-line is prose, not dialogue",
+      plan.split_dialogue("she looks at @ref1: a long pause")[1], [])
+check("an unnamed voice carries its own description",
+      plan.split_dialogue("@voice(a low male narrator) says: In the beginning")[1][0]["voice"],
+      "a low male narrator")
+
+talk = compile(tl([img(0, 72, "a.png", prompt="@ref1 holds a cookie\n"
+                                              "@ref1 exclaims with annoyance: Watch your dog!"),
+                   img(72, 48, "b.png", prompt="@ref2 says with a playful tone: He likes cookies."),
+                   img(120, 120, "c.png", prompt="@ref1 replies: He has good taste.")],
+                  ref_mode="ON",
+                  subjects=[{"images": [{"b64": "x", "name": "w.png"}],
+                             "description": "a young blonde woman"},
+                            {"images": [{"b64": "y", "name": "m.png"}],
+                             "description": "a young man in a hoodie"}]),
+               duration_f=240)
+check_in("a speaking subject keeps its label and gains a speaker ID",
+         "<Subject 1> (S1) exclaims with annoyance, <d>[English] Watch your dog!</d>",
+         talk["prompt"])
+check_in("the second speaker is S2", "<Subject 2> (S2) says with a playful tone,",
+         talk["prompt"])
+check_in("the first speaker keeps S1 when they speak again",
+         "<Subject 1> (S1) replies, <d>[English] He has good taste.</d>", talk["prompt"])
+check("exactly two speakers were numbered",
+      len(set(re.findall(r"\(S\d+\)", talk["prompt"]))), 2)
+check_not_in("no speaker ID leaks into retention_analysis",
+             "(S", talk["prompt"].split("retention_analysis:")[1].split("detailed_description")[0])
+check_in("a subject that speaks counts as appearing in that shot",
+         "<Subject 2> (appears in [Shot 2]):", talk["prompt"])
+
+# a shot whose only content is a spoken line is still a shot
+only_talk = compile(tl([img(0, 120, "a.png", prompt="she waits"),
+                        {"type": "text", "start": 120, "length": 120,
+                         "prompt": "@ref1 whispers: at last"}],
+                       ref_mode="ON",
+                       subjects=[{"images": [{"b64": "x", "name": "w.png"}],
+                                  "description": "a woman"}]),
+                    duration_f=240)
+check_in("a dialogue-only shot is still numbered and kept",
+         "[Shot 2] At 00:05.000, <Subject 1> (S1) whispers, <d>[English] at last</d>",
+         only_talk["prompt"])
+
+# guide 5.4: verbal content inside reused audio has no independent vocal source
+bgm = compile(tl([img(0, 240, "a.png", prompt="@audio1: we'll meet again")], ref_mode="ON",
+                 audioSegments=[{"audioFile": "song.wav", "start": 0, "length": 240,
+                                 "retention": "fully_copy"}]),
+              duration_f=240, use_custom_audio=True)
+check_in("a line carried by reused audio names its source",
+         "<Audio 1> carries <d>[English] we'll meet again</d>", bgm["prompt"])
+check_not_in("...and invents no speaker ID for it", "(S1)", bgm["prompt"])
+
+# the comfyui format has no <d> notation, but must not silently drop the line either
+cf_talk = compile(tl([img(0, 240, "a.png", prompt="@ref1 says: hello")], ref_mode="ON",
+                     prompt_format="comfyui",
+                     subjects=[{"images": [{"b64": "x", "name": "w.png"}],
+                                "description": "a woman"}]), duration_f=240)
+check_in("dialogue survives into the comfyui format", "hello", cf_talk["prompt"])
+
+# ------------------------------------------------- spec warnings
+check_in("a speaker ID in a retention note is reported",
+         "reserves those for detailed_description",
+         " ".join(compile(tl([], ref_mode="ON",
+                             subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                        "retentionNote": "her voice (S1) is kept"}])
+                          )["ref_warnings"]))
+check("a clean timeline reports no speaker-ID warning",
+      any("(Sx)" in w for w in talk["ref_warnings"]), False)
+long_shots = [img(i * 20, 20, "%d.png" % i, prompt=" ".join(["word"] * 200))
+              for i in range(3)]
+check_in("an over-long description is reported",
+         "the guide suggests 350-500",
+         " ".join(compile(tl(long_shots, ref_mode="ON"), duration_f=240)["ref_warnings"]))
+check("a two-shot test is not nagged for being short",
+      any("guide suggests" in w for w in
+          compile(tl([img(0, 120, "a.png", prompt="she enters"),
+                      img(120, 120, "b.png", prompt="she leaves")], ref_mode="ON"),
+                  duration_f=240)["ref_warnings"]), False)
 
 # ------------------------------------------------- Analyze output parsing
 check("split_analysis reads both labelled lines",

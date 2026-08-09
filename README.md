@@ -50,8 +50,9 @@ and no longer always followed exactly: subject slots carry a **kind** (scene, pr
 `weak_reference`, plus a box to write the sentence that follows it in your own words.
 Timeline images can be frame anchors, storyboard references, or subject-defining images
 that get no `<Picture>` entry at all. Prompts gain a `summary` section with a derived
-`[task type]` prefix, and `retention_analysis` uses the guide's own line format. The
-reference panel resizes, with the extra height going to the image previews.
+`[task type]` prefix, and `retention_analysis` uses the guide's own line format. Dialogue
+written as `@ref1 says: …` is given speaker IDs and `<d>` tags for you. The reference panel
+resizes, with the extra height going to the image previews.
 
 **0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
 phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
@@ -337,6 +338,41 @@ doubled. Paste a whole line that already starts with its label and it is taken a
 Frame anchors and storyboard references are the one exception: they have **retained**
 alone. Their declaration states where the image sits in the video (`<Picture 2> is the
 first frame of [Shot 1].`), which the timeline already knows.
+
+### Dialogue
+
+A line in a shot prompt that **starts** with a reference tag and contains a colon is
+dialogue. Everything between the tag and the colon is how it is delivered:
+
+```
+@ref1 exclaims with light annoyance: Hey! Watch your dog!
+```
+
+becomes
+
+```
+<Subject 1> (S1) exclaims with light annoyance, <d>[English] Hey! Watch your dog!</d>
+```
+
+`(S1)` is a **speaker ID**. You never write one: they are handed out in the order people
+actually speak across the whole timeline, and the same speaker keeps the same ID at every
+later line — so a subject who talks in shots 1 and 3 is `(S1)` in both. They are also kept
+out of `retention_analysis`, which the guide forbids; type one into a **retained** box and
+the preview says so.
+
+| Write | For |
+|---|---|
+| `@ref1 says: …` | a subject from the panel — the delivery defaults to `says` |
+| `@ref1 [French] murmure: …` | another language; `[English]` is assumed |
+| `@voice(a low male narrator) says: …` | someone with no panel slot. Reuse the same description and they keep one ID |
+| `@audio2: …` | words carried by a reused track. Names `<Audio 2>` as the source and gets **no** speaker ID, per the guide |
+
+Only a line that *starts* with a tag counts, so prose that merely mentions `@ref1` or
+contains a colon is left alone — the same rule the `Audio:` / `Music:` lines follow. A shot
+whose only content is a spoken line is still a numbered shot.
+
+`<scenetrans>` and `<cutoff>`, for dialogue crossing a cut or speech that is cut short, are
+passed through untouched if you type them.
 
 ### Resizing the panel
 
