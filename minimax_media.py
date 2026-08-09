@@ -236,6 +236,14 @@ async def compile_prompt_endpoint(request):
                                 "first and last frame. Switch to 'Refs ON (ref2va)'." % middles)
         if p["ref_mode_on"] and len(p["ref_image_slots"]) >= plan.MAX_REF_IMAGES:
             warnings.append("Reference images are capped at %d." % plan.MAX_REF_IMAGES)
+        # The batch on the ref_images socket only exists once the graph runs, so the
+        # preview cannot number around it. Say so: the alternative is a prompt that shows
+        # <Picture 2> where the render will send <Picture 5>, with nothing to explain why.
+        if (p["ref_mode_on"] and bool(data.get("ref_images_connected"))
+                and not int(data.get("extra_ref_image_count") or 0)):
+            warnings.append(
+                "Images on the ref_images socket are not counted here — every <Picture i> "
+                "below shifts up by that batch size when you render.")
         warnings.extend(p.get("ref_warnings") or [])
 
         return web.json_response({

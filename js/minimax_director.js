@@ -646,9 +646,10 @@ const STYLES = `
     border-top: 1px solid #333;
     margin: 4px 0;
   }
-  /* --- Character reference slots --- */
-  .mmxd-characters-container { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
-  .mmxd-character-slot { flex: 1; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
+  /* --- Subject reference slots --- */
+  .mmxd-characters-container { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px; margin-top: 6px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  /* grows to nine slots, so they wrap into rows of three rather than shrinking to slivers */
+  .mmxd-character-slot { flex: 1 1 calc(33.333% - 8px); min-width: 120px; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
   .mmxd-character-slot:hover { border-color: #666; background: #252525; }
   .mmxd-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
   .mmxd-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
@@ -663,7 +664,11 @@ const STYLES = `
   .mmxd-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
   .mmxd-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
   .mmxd-character-desc:focus { border-color: #4fff8f; }
-  /* --- @char autocomplete popup --- */
+  /* --- per-reference kind / retention controls --- */
+  .mmxd-ref-controls { display: flex; gap: 4px; width: 100%; margin-top: 4px; box-sizing: border-box; }
+  .mmxd-ref-controls .mmxd-msel { flex: 1 1 0; min-width: 0; height: 20px; font-size: 9px; padding: 0 4px 0 6px; }
+  .mmxd-ref-controls .mmxd-msel-caret svg { width: 8px; height: 8px; }
+  /* --- @refN autocomplete popup --- */
   .mmxd-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
   .mmxd-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
   .mmxd-autocomplete-item:hover, .mmxd-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
@@ -791,6 +796,99 @@ function createMenuSelect(options, opts) {
 }
 
 
+// --- Full-reference vocabulary ------------------------------------------------------
+// Mirrors minimax_plan.py, which mirrors the H3 reference guide
+// (skills/h3-prompt-writing/references/ref-en.txt). The retention markers are shown by
+// their own names rather than friendlier ones: the guide calls them "fixed English values
+// in the output format", they are written into the prompt verbatim, and a prettier label
+// would hide which of them you actually picked.
+const MAX_SUBJECT_SLOTS = 9;
+
+const SUBJECT_KIND_OPTIONS = [
+  { value: "person", label: "person" },
+  { value: "animal", label: "animal" },
+  { value: "object", label: "object" },
+  { value: "environment", label: "environment" },
+  { value: "clothing", label: "clothing" },
+  { value: "prop", label: "prop" },
+  { value: "interface", label: "interface" },
+  { value: "effect", label: "visual effect" },
+  { value: "style", label: "style" },
+  { value: "action", label: "action" },
+  { value: "expression", label: "expression" },
+  { value: "pose", label: "pose" },
+];
+
+const RETENTION_OPTIONS = [
+  { value: "fully_preserved", label: "fully_preserved" },
+  { value: "partially_preserved", label: "partially_preserved" },
+  { value: "attribute_transfer", label: "attribute_transfer" },
+  { value: "weak_reference", label: "weak_reference" },
+];
+
+const RETENTION_AUDIO_OPTIONS = [
+  { value: "reference", label: "reference" },
+  { value: "fully_copy", label: "fully_copy" },
+  { value: "partially_copy", label: "partially_copy" },
+  { value: "weak_reference", label: "weak_reference" },
+];
+
+const REF_ROLE_OPTIONS = [
+  { value: "auto", label: "frame anchor" },
+  { value: "storyboard", label: "storyboard" },
+  { value: "subject", label: "defines a subject" },
+];
+
+const RETENTION_TIP =
+  "How closely the model follows this reference (guide 4.1):\n" +
+  "fully_preserved — keep it as defined\n" +
+  "partially_preserved — keep it, but some defined traits change\n" +
+  "attribute_transfer — move its traits onto a different subject\n" +
+  "weak_reference — broad similarity only";
+
+const RETENTION_AUDIO_TIP =
+  "How the reference audio is used (guide 4.2):\n" +
+  "reference — follow its timbre or style, do not copy the signal\n" +
+  "fully_copy — reuse it as the complete final audio track\n" +
+  "partially_copy — copy part of it, add or replace the rest\n" +
+  "weak_reference — broad similarity in category or atmosphere only";
+
+const REF_ROLE_TIP =
+  "What this image is for (guide 2.2):\n" +
+  "frame anchor — it IS a first/last frame or keyframe of its shot\n" +
+  "storyboard — it plans the shot's viewpoint and staging\n" +
+  "defines a subject — it only defines a look, so it gets no <Picture> entry";
+
+// Slots wrap three to a row; the node has to reserve the rows or it crops the last one.
+const SUBJECT_SLOT_H = 148, SUBJECT_SLOT_GAP = 12;
+function subjectPanelHeight(slotCount) {
+  const rows = Math.max(1, Math.ceil(slotCount / 3));
+  return rows * SUBJECT_SLOT_H + (rows - 1) * SUBJECT_SLOT_GAP + 20;
+}
+
+function emptySubjectSlot() {
+  return { images: [], description: "", kind: "person", retention: "fully_preserved",
+           retentionNote: "" };
+}
+
+// Old timelines wrote `characters` and had neither kind nor retention. Reading them back
+// with today's defaults reproduces the old wording exactly, so nothing silently changes
+// meaning under an existing workflow.
+function normaliseSubjectSlots(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = list.slice(0, MAX_SUBJECT_SLOTS).map((c) => ({
+    images: Array.isArray(c.images) ? c.images : [],
+    description: c.description || "",
+    kind: SUBJECT_KIND_OPTIONS.some(o => o.value === c.kind) ? c.kind : "person",
+    retention: RETENTION_OPTIONS.some(o => o.value === c.retention)
+      ? c.retention : "fully_preserved",
+    retentionNote: c.retentionNote || "",
+  }));
+  while (out.length < 3) out.push(emptySubjectSlot());
+  return out;
+}
+
+
 // --- Icons ---
 const ICONS = {
   upload: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`,
@@ -846,11 +944,9 @@ function parseInitial(jsonStr) {
     analyzeProvider: "ollama",
     analyzeBaseUrl: "",
     analyzeModel: "",
-    characters: [
-      { images: [], description: "" },
-      { images: [], description: "" },
-      { images: [], description: "" }
-    ]
+    summary: "",
+    task_type_override: "",
+    subjects: normaliseSubjectSlots(null)
   };
   try {
     if (jsonStr) {
@@ -884,14 +980,15 @@ function parseInitial(jsonStr) {
       if (p.analyzeProvider !== undefined) parsed.analyzeProvider = p.analyzeProvider;
       if (p.analyzeBaseUrl !== undefined) parsed.analyzeBaseUrl = p.analyzeBaseUrl;
       if (p.analyzeModel !== undefined) parsed.analyzeModel = p.analyzeModel;
-      if (Array.isArray(p.characters)) {
-        parsed.characters = p.characters.map(c => ({
-          images: Array.isArray(c.images) ? c.images : [],
-          description: c.description || ""
-        }));
-        while (parsed.characters.length < 3) {
-          parsed.characters.push({ images: [], description: "" });
-        }
+      if (p.summary !== undefined) parsed.summary = p.summary || "";
+      if (p.task_type_override !== undefined) {
+        parsed.task_type_override = p.task_type_override || "";
+      }
+      // `subjects` is the current key; `characters` is the same panel's old one. A
+      // timeline saved before subject kinds existed reads back with today's defaults,
+      // which reproduce the wording it was written against.
+      if (Array.isArray(p.subjects) || Array.isArray(p.characters)) {
+        parsed.subjects = normaliseSubjectSlots(p.subjects || p.characters);
       }
       if (Array.isArray(p.segments)) {
         parsed.segments = p.segments.map(s => {
@@ -3062,6 +3159,12 @@ class TimelineEditor {
     this.musicInput = makeSoundField(
       "non_diegetic_music", "non_diegetic_music",
       "Score only the audience hears. Name instrumentation, tempo and dynamics, or write N/A.");
+    // The reference guide's own section, and the one place the [task type] prefix can
+    // hang. Same field pattern as the two above for the same reason: one value, read by
+    // both the node and the live preview, with no second copy to fall out of step.
+    this.summaryInput = makeSoundField(
+      "summary", "summary",
+      "One paragraph on the target video and what each reference is for. The [task type] prefix is added for you.");
     globalPromptWrapper.appendChild(soundRow);
 
     this.globalPromptInput.addEventListener("input", (e) => {
@@ -4024,10 +4127,10 @@ class TimelineEditor {
     this.wrapper.appendChild(propContainer);
     this.wrapper.appendChild(this.globalPropContainer);
 
-    // --- Character reference slots (3 @char panels) at the bottom of the editor ---
+    // --- Subject reference slots (@refN panels) at the bottom of the editor ---
     this.createCharacterSlots(this.wrapper);
 
-    // --- @char autocomplete on both prompt fields ---
+    // --- @refN autocomplete on both prompt fields ---
     if (this.globalPromptInput) this.setupAutocomplete(this.globalPromptInput);
     if (this.promptInput) this.setupAutocomplete(this.promptInput);
 
@@ -9170,67 +9273,115 @@ class TimelineEditor {
 
   // --- Backend Data Sync ---
   // --- Visual Character Reference Slots ---
+  // The slots hold <Subject N> definitions, which the guide says may be "people, animals,
+  // or objects; scenes, backgrounds, or environments; clothing, props, interfaces, or
+  // visual effects; styles, actions, expressions, or poses" — not only characters. The
+  // class names still say "character" because they are shared with a lot of CSS and with
+  // the LTX editor this was forked from; the data key is `subjects`.
+  subjectSlots() {
+    if (!Array.isArray(this.timeline.subjects)) {
+      this.timeline.subjects = normaliseSubjectSlots(
+        this.timeline.subjects || this.timeline.characters);
+    }
+    return this.timeline.subjects;
+  }
+
+  // Three always visible, then one empty slot ahead of whatever is filled, so the panel
+  // grows only as far as it is used instead of showing nine empty boxes on day one.
+  visibleSlotCount() {
+    const slots = this.subjectSlots();
+    let filled = 0;
+    slots.forEach((s, i) => { if (s.images && s.images.length) filled = i + 1; });
+    return Math.max(3, Math.min(MAX_SUBJECT_SLOTS, filled + 1));
+  }
+
+  _buildSubjectSlotEl(i) {
+    const slot = document.createElement("div");
+    slot.className = "mmxd-character-slot";
+    slot.dataset.index = i;
+
+    slot.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.classList.add("drag-over");
+    });
+    slot.addEventListener("dragleave", (e) => {
+      e.stopPropagation();
+      slot.classList.remove("drag-over");
+    });
+    slot.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.classList.remove("drag-over");
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        Array.from(e.dataTransfer.files).forEach(f => this.handleCharacterImageUpload(f, i));
+      }
+    });
+    slot.addEventListener("click", (e) => {
+      if (e.target.closest(".mmxd-character-delete") ||
+          e.target.closest(".mmxd-character-validate-btn") ||
+          e.target.closest(".mmxd-character-desc") ||
+          e.target.closest(".mmxd-msel")) return;
+
+      const fi = document.createElement("input");
+      fi.type = "file";
+      fi.accept = "image/*";
+      fi.multiple = true;
+      fi.addEventListener("change", (ev) => {
+        if (ev.target.files) {
+          Array.from(ev.target.files).forEach(f => this.handleCharacterImageUpload(f, i));
+        }
+      });
+      fi.click();
+    });
+    return slot;
+  }
+
   createCharacterSlots(parent) {
     const container = document.createElement("div");
     container.className = "mmxd-characters-container";
 
-    if (!this.timeline.characters) {
-      this.timeline.characters = [
-        { images: [], description: "" },
-        { images: [], description: "" },
-        { images: [], description: "" }
-      ];
-    }
-
+    this.subjectSlots();
     this.characterSlots = [];
-
-    for (let i = 0; i < 3; i++) {
-      const slot = document.createElement("div");
-      slot.className = "mmxd-character-slot";
-      slot.dataset.index = i;
-
-      slot.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        slot.classList.add("drag-over");
-      });
-      slot.addEventListener("dragleave", (e) => {
-        e.stopPropagation();
-        slot.classList.remove("drag-over");
-      });
-      slot.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        slot.classList.remove("drag-over");
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          Array.from(e.dataTransfer.files).forEach(f => this.handleCharacterImageUpload(f, i));
-        }
-      });
-      slot.addEventListener("click", (e) => {
-        if (e.target.closest(".mmxd-character-delete") ||
-            e.target.closest(".mmxd-character-validate-btn") ||
-            e.target.closest(".mmxd-character-desc")) return;
-
-        const fi = document.createElement("input");
-        fi.type = "file";
-        fi.accept = "image/*";
-        fi.multiple = true;
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files) {
-            Array.from(ev.target.files).forEach(f => this.handleCharacterImageUpload(f, i));
-          }
-        });
-        fi.click();
-      });
-
-      container.appendChild(slot);
-      this.characterSlots.push(slot);
-    }
 
     parent.appendChild(container);
     this.charPanelContainer = container;
-    this.charPanelHeight = 150;
+    this.charPanelHeight = subjectPanelHeight(3);
     this.updateCharacterSlotsUI();
+  }
+
+  // Adds or removes slot elements so the DOM matches visibleSlotCount(). Called from
+  // updateCharacterSlotsUI, which is the only entry point that redraws the panel.
+  _syncSubjectSlotEls() {
+    const container = this.charPanelContainer;
+    if (!container) return;
+    const want = this.visibleSlotCount();
+    const slots = this.subjectSlots();
+    while (slots.length < want) slots.push(emptySubjectSlot());
+    while (this.characterSlots.length < want) {
+      const el = this._buildSubjectSlotEl(this.characterSlots.length);
+      container.appendChild(el);
+      this.characterSlots.push(el);
+    }
+    while (this.characterSlots.length > want) {
+      this.characterSlots.pop().remove();
+    }
+
+    // Slots wrap three to a row, so the panel's reserved height has to follow the row
+    // count or the node crops the last row the moment a fourth subject is added.
+    const height = subjectPanelHeight(want);
+    const grew = height !== this.charPanelHeight;
+    this.charPanelHeight = height;
+    // Only once the panel has been through a full build: during construction the widget's
+    // computeSize is not installed yet, so resizing here would size the node against a
+    // panel height it does not know about — and would fight the size a saved workflow
+    // restored. After that, this fires whenever a slot is gained or lost.
+    if (grew && this._subjectPanelReady && this.node?.setDirtyCanvas
+        && typeof this.node.computeSize === "function" && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
+    this._subjectPanelReady = true;
   }
 
   handleCharacterImageUpload(file, idx) {
@@ -9276,13 +9427,11 @@ class TimelineEditor {
           stored = { b64: canvas.toDataURL("image/jpeg", 0.95), name: file.name };
         }
 
-        if (!this.timeline.characters[idx].images) {
-          this.timeline.characters[idx].images = [];
-        }
-        if (this.timeline.characters[idx].images.length >= 2) {
-          this.timeline.characters[idx].images.shift();
-        }
-        this.timeline.characters[idx].images.push(stored);
+        const subjects = this.subjectSlots();
+        while (subjects.length <= idx) subjects.push(emptySubjectSlot());
+        if (!subjects[idx].images) subjects[idx].images = [];
+        if (subjects[idx].images.length >= 2) subjects[idx].images.shift();
+        subjects[idx].images.push(stored);
         this.updateCharacterSlotsUI();
         this.commitChanges();
       };
@@ -9324,17 +9473,12 @@ class TimelineEditor {
 
   updateCharacterSlotsUI() {
     if (!this.characterSlots) return;
-    if (!this.timeline.characters) {
-      this.timeline.characters = [
-        { images: [], description: "" },
-        { images: [], description: "" },
-        { images: [], description: "" }
-      ];
-    }
+    const subjects = this.subjectSlots();
+    this._syncSubjectSlotEls();
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < this.characterSlots.length; i++) {
       const slot = this.characterSlots[i];
-      const data = this.timeline.characters[i] || { images: [], description: "" };
+      const data = subjects[i] || emptySubjectSlot();
       slot.innerHTML = "";
 
       if (data.images && data.images.length > 0) {
@@ -9356,8 +9500,8 @@ class TimelineEditor {
           delBtn.title = "Delete Image";
           delBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (this.timeline.characters[i] && this.timeline.characters[i].images) {
-              this.timeline.characters[i].images.splice(imgIdx, 1);
+            if (subjects[i] && subjects[i].images) {
+              subjects[i].images.splice(imgIdx, 1);
               this.updateCharacterSlotsUI();
               this.commitChanges();
             }
@@ -9388,15 +9532,41 @@ class TimelineEditor {
         descInput.value = data.description || "";
         descInput.placeholder = "manual description...";
         descInput.addEventListener("input", () => {
-          this.timeline.characters[i].description = descInput.value;
+          subjects[i].description = descInput.value;
           this.commitChanges();
         });
         descInput.addEventListener("click", (e) => { e.stopPropagation(); });
         slot.appendChild(descInput);
+
+        // What this subject IS, and how closely to follow it. The kind only supplies a
+        // noun for the definition line when no description is typed, so a description
+        // always wins; the retention marker is written into retention_analysis verbatim.
+        const row = document.createElement("div");
+        row.className = "mmxd-ref-controls";
+
+        const kindSel = createMenuSelect(SUBJECT_KIND_OPTIONS, { width: "100%" });
+        kindSel.value = data.kind || "person";
+        kindSel.title = "What this subject is. A typed description replaces it.";
+        kindSel.addEventListener("change", () => {
+          subjects[i].kind = kindSel.value;
+          this.commitChanges();
+        });
+
+        const retSel = createMenuSelect(RETENTION_OPTIONS, { width: "100%" });
+        retSel.value = data.retention || "fully_preserved";
+        retSel.title = RETENTION_TIP;
+        retSel.addEventListener("change", () => {
+          subjects[i].retention = retSel.value;
+          this.commitChanges();
+        });
+
+        row.appendChild(kindSel);
+        row.appendChild(retSel);
+        slot.appendChild(row);
       } else {
         const label = document.createElement("div");
         label.className = "mmxd-character-label";
-        label.textContent = `@char${i + 1}`;
+        label.textContent = `@ref${i + 1}`;
 
         const placeholder = document.createElement("div");
         placeholder.className = "mmxd-character-placeholder";
@@ -9437,7 +9607,7 @@ class TimelineEditor {
     }
 
     const b64_images = (await Promise.all(
-      (this.timeline.characters[idx].images || []).map(img => this._refImageToB64(img))
+      (this.subjectSlots()[idx].images || []).map(img => this._refImageToB64(img))
     )).filter(Boolean);
 
     try {
@@ -9454,7 +9624,7 @@ class TimelineEditor {
       });
       const result = await resp.json();
       if (result.status === "success") {
-        this.timeline.characters[idx].description = result.description;
+        this.subjectSlots()[idx].description = result.description;
         btn.textContent = "Success!";
         setTimeout(() => { this.updateCharacterSlotsUI(); this.commitChanges(); }, 1500);
       } else {
@@ -9470,7 +9640,7 @@ class TimelineEditor {
     }
   }
 
-  // --- @char auto-complete popup (attaches to a given textarea) ---
+  // --- @refN auto-complete popup (attaches to a given textarea) ---
   setupAutocomplete(input) {
     if (!input || input._prAutocompleteAttached) return;
     input._prAutocompleteAttached = true;
@@ -9482,11 +9652,31 @@ class TimelineEditor {
     if (!this._autocompleteMenus) this._autocompleteMenus = [];
     this._autocompleteMenus.push(menu);
 
-    const suggestions = [
-      { tag: "@char1", label: "Character 1" },
-      { tag: "@char2", label: "Character 2" },
-      { tag: "@char3", label: "Character 3" }
-    ];
+    // One entry per slot that has something in it, labelled with its description so a
+    // panel of nine is still navigable. @char1..@char3 stay valid in typed prompts — the
+    // planner accepts both spellings — but only @refN is offered, since a slot is no
+    // longer necessarily a character.
+    const buildSuggestions = () => {
+      const slots = this.subjectSlots();
+      const out = [];
+      for (let i = 0; i < slots.length && i < MAX_SUBJECT_SLOTS; i++) {
+        const s = slots[i] || {};
+        if (!(s.images && s.images.length)) continue;
+        const desc = (s.description || "").trim();
+        out.push({
+          tag: `@ref${i + 1}`,
+          label: desc ? (desc.length > 40 ? desc.slice(0, 40) + "…" : desc)
+                      : (s.kind || "person"),
+        });
+      }
+      // nothing dropped yet: still offer the three that always exist, so the tag is
+      // discoverable before the panel is filled
+      if (!out.length) {
+        for (let i = 0; i < 3; i++) out.push({ tag: `@ref${i + 1}`, label: `slot ${i + 1}` });
+      }
+      return out;
+    };
+    let suggestions = buildSuggestions();
 
     let activeIndex = 0;
     let showMenu = false;
@@ -9505,6 +9695,9 @@ class TimelineEditor {
       const cursor = input.selectionStart;
       const query = text.slice(queryStart + 1, cursor).toLowerCase();
 
+      // rebuilt each time the menu is drawn: slots are added and described while the
+      // editor is open, and a stale list would offer tags that no longer resolve
+      suggestions = buildSuggestions();
       const filtered = suggestions.filter(s => s.tag.toLowerCase().includes("@" + query) || s.tag.toLowerCase().includes(query));
       if (filtered.length === 0) { hideMenu(); return; }
 
@@ -9729,9 +9922,14 @@ class TimelineEditor {
       analyzeProvider: this.timeline.analyzeProvider || "ollama",
       analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
       analyzeModel: this.timeline.analyzeModel || "",
-      characters: (this.timeline.characters || []).map(c => ({
+      summary: this.timeline.summary || "",
+      task_type_override: this.timeline.task_type_override || "",
+      subjects: this.subjectSlots().map(c => ({
         images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
-        description: c.description || ""
+        description: c.description || "",
+        kind: c.kind || "person",
+        retention: c.retention || "fully_preserved",
+        retentionNote: c.retentionNote || ""
       })),
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
@@ -10533,6 +10731,58 @@ class TimelineEditor {
     };
 
     // ==========================================
+    // 5b. Reference role and retention (ref2va only — the fl2va path has no labels to
+    // attach any of this to, so showing it there would offer a setting with no effect)
+    // ==========================================
+    const refBtns = [];
+    if (String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF") {
+      let onRefChange = () => {};
+      const cycler = (caption, options, key, fallback, tip) => {
+        const btn = document.createElement("button");
+        btn.className = "mmxd-gap-menu-btn";
+        const draw = () => {
+          const cur = options.find(o => o.value === seg[key]) || options[0];
+          btn.innerHTML = `${caption}: <b style="color:#4fff8f">${cur.label}</b>`;
+        };
+        btn.title = tip;
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const at = Math.max(0, options.findIndex(o => o.value === (seg[key] || fallback)));
+          seg[key] = options[(at + 1) % options.length].value;
+          draw();
+          onRefChange();
+          this.commitChanges();
+          this.render();
+          if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+        };
+        draw();
+        return btn;
+      };
+      if (trackType === "image" && (seg.type === "image" || seg.type === "video")) {
+        refBtns.push(cycler("Used as", REF_ROLE_OPTIONS, "refRole", "auto", REF_ROLE_TIP));
+        // Only meaningful once the image defines something rather than anchoring a frame:
+        // it picks the noun the <Subject N> line uses. Built either way and shown on
+        // demand, so cycling the role reveals it without reopening the menu. A slot in
+        // the panel above is the place for a subject that needs a written description.
+        const kindBtn = cycler("Defines a", SUBJECT_KIND_OPTIONS, "refKind", "person",
+                               "What this image defines, for its <Subject N> line.");
+        onRefChange = () => {
+          kindBtn.style.display = seg.refRole === "subject" ? "" : "none";
+        };
+        onRefChange();
+        refBtns.push(kindBtn);
+        refBtns.push(cycler("Follow it", RETENTION_OPTIONS, "retention",
+                            "fully_preserved", RETENTION_TIP));
+      } else if (trackType === "motion") {
+        refBtns.push(cycler("Follow it", RETENTION_OPTIONS, "retention",
+                            "fully_preserved", RETENTION_TIP));
+      } else if (trackType === "audio") {
+        refBtns.push(cycler("Follow it", RETENTION_AUDIO_OPTIONS, "retention",
+                            "reference", RETENTION_AUDIO_TIP));
+      }
+    }
+
+    // ==========================================
     // 6. Define Delete Option
     // ==========================================
     const delBtn = document.createElement("button");
@@ -10585,6 +10835,12 @@ class TimelineEditor {
     // Group 4: Convert to End Frame (Only if toggleEndFrameBtn is defined)
     if (toggleEndFrameBtn) {
       menu.appendChild(toggleEndFrameBtn);
+      menu.appendChild(makeDivider());
+    }
+
+    // Group 5a: what this reference is for, and how closely to follow it
+    if (refBtns.length) {
+      refBtns.forEach(b => menu.appendChild(b));
       menu.appendChild(makeDivider());
     }
 
@@ -11227,9 +11483,14 @@ class TimelineEditor {
         analyzeProvider: this.timeline.analyzeProvider || "ollama",
         analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
         analyzeModel: this.timeline.analyzeModel || "",
-        characters: (this.timeline.characters || []).map(c => ({
+        summary: this.timeline.summary || "",
+        task_type_override: this.timeline.task_type_override || "",
+        subjects: this.subjectSlots().map(c => ({
           images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
-          description: c.description || ""
+          description: c.description || "",
+          kind: c.kind || "person",
+          retention: c.retention || "fully_preserved",
+          retentionNote: c.retentionNote || ""
         })),
         segments: (this.timeline.segments || []).map(s => {
           const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
@@ -11594,6 +11855,27 @@ class TimelineEditor {
     fmtCtrl.appendChild(fmtCuSeg);
 
     menu.appendChild(this._makeSettingRow("Prompt Format", fmtCtrl));
+
+    // The [task type] prefix on `summary` is derived from what the references are
+    // actually used for. This is the escape hatch for the two the timeline cannot know —
+    // `video editing` and `video continuation`, which need a source video this node has
+    // no path to edit or continue.
+    const taskInput = document.createElement("input");
+    taskInput.type = "text";
+    taskInput.className = "mmxd-settings-input";
+    taskInput.placeholder = "auto — e.g. video continuation + keyframe completion";
+    taskInput.value = this.timeline.task_type_override || "";
+    taskInput.title =
+      "Overrides the square-bracketed task type on the summary line.\n" +
+      "Leave empty to derive it from the references in use.\n" +
+      "Guide values: keyframe completion, reference generation, video editing,\n" +
+      "video continuation, audio reuse, audio reference — joined with ' + '.";
+    taskInput.addEventListener("input", () => {
+      this.timeline.task_type_override = taskInput.value;
+      this.commitChanges(true);
+      if (this.node._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+    });
+    menu.appendChild(this._makeSettingRow("Task Type", taskInput));
 
     const divider2 = document.createElement("div");
     divider2.className = "mmxd-settings-divider";
@@ -12808,9 +13090,9 @@ app.registerExtension({
           const canvasH = self._timelineEditor ? self._timelineEditor.canvasHeight : CANVAS_HEIGHT;
           const propH = self._timelineEditor ? (self._timelineEditor.propHeight || 90) : 90;
           const globalPropH = self._timelineEditor ? (self._timelineEditor.globalPropHeight || 60) : 60;
-          // Reserve room for the @char reference panel at the bottom so the node doesn't
+          // Reserve room for the @refN reference panel at the bottom so the node doesn't
           // collapse and crop it whenever ComfyUI recomputes the node height.
-          const charPanelH = self._timelineEditor ? (self._timelineEditor.charPanelHeight || 150) : 150;
+          const charPanelH = self._timelineEditor ? (self._timelineEditor.charPanelHeight || subjectPanelHeight(3)) : subjectPanelHeight(3);
           const nodeWidth = self.size?.[0] || width || 1375;
           return [Math.max(10, nodeWidth - 30), canvasH + propH + globalPropH + charPanelH + 160];
         };
@@ -12930,6 +13212,12 @@ app.registerExtension({
               use_custom_audio: !!w("use_custom_audio")?.value,
               override_audio: !!w("override_audio")?.value,
               global_prompt: self.properties?.global_prompt || "",
+              // Whether anything is wired to ref_images, not how many images it carries:
+              // that is an upstream tensor's batch size and nothing here can know it
+              // before the graph runs. The endpoint turns this into a caveat on the
+              // preview rather than a count it would have to invent.
+              ref_images_connected:
+                self.inputs?.find(i => i.name === "ref_images")?.link != null,
             };
             const resp = await api.fetchApi("/minimax_director/compile_prompt", {
               method: "POST", body: JSON.stringify(body),

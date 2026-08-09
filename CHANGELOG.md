@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.2.0
+
+Full-reference mode, from
+[`references/ref-en.txt`](https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/references/ref-en.txt).
+Until now a reference image was always a character, always followed as tightly as
+possible, and a timeline image was always a frame anchor. The guide describes far more
+than that, and two of its sections were structurally missing from the output.
+
+- **A reference no longer has to be a character.** The guide defines `<Subject N>` as
+  "people, animals, or objects; scenes, backgrounds, or environments; clothing, props,
+  interfaces, or visual effects; styles, actions, expressions, or poses". Each slot now
+  carries a **kind** that supplies the noun when no description is written, so a slot can
+  hold a location or a look instead of a face. The panel grows from three slots to nine as
+  you fill it, and `@ref1` … `@ref9` address them. `@char1` … `@char3` still resolve.
+
+- **A reference no longer has to be followed exactly.** Every reference carries one of the
+  guide's four **retention markers**, written into `retention_analysis` verbatim because
+  the guide calls them "fixed English values in the output format":
+
+  | Marker | Meaning |
+  |---|---|
+  | `fully_preserved` | The defined role of the referenced content is fully preserved |
+  | `partially_preserved` | Still used, some defined characteristics changed |
+  | `attribute_transfer` | Its characteristics move to a different target subject |
+  | `weak_reference` | Broad similarity in style, category, composition or atmosphere only |
+
+  Audio uses its own set — `fully_copy`, `partially_copy`, `reference`, `weak_reference` —
+  because copying a signal and imitating one are different jobs. An off-spec value coming
+  from an edited timeline is clamped rather than passed through into the prompt.
+
+- **An image only gets a `<Picture N>` entry when it really is one.** The guide: "If an
+  image is used only to define a character, scene, costume, or style, do not create a
+  standalone picture entry. Instead, cite the image source inside the corresponding
+  `<Subject N>` definition." A timeline image can now be a **frame anchor** (unchanged),
+  a **storyboard** reference, or **subject-defining** — the last getting no picture entry
+  and, because it is no longer a keyframe, no longer cropped to the output canvas either.
+
+- **`subject_definitions` declares every label; `retention_analysis` scores every label.**
+  Both sections were previously incomplete: pictures were never declared, and retention
+  was prose. The two sections now follow the guide's shapes, and a subject's
+  `(appears in [Shot 1], [Shot 3])` is read back off the shot text rather than assumed.
+
+  ```
+  0.1.5   subject_definitions: <Subject 1> is the character shown in <Picture 1>.
+          retention_analysis: Keep the identity, face and clothing of <Subject 1>
+                              consistent across every shot. [Shot 1] begins from <Picture 2>.
+
+  0.2.0   subject_definitions: <Subject 1> is a woman in a red coat, shown in <Picture 1>.
+                               <Picture 2> is the first frame of [Shot 1].
+          retention_analysis:
+          <Subject 1> (appears in [Shot 1]): fully_preserved - the identity, face and
+            clothing of <Subject 1> are retained.
+          <Picture 2> ([Shot 1] first frame): fully_preserved - the framing and
+            composition of <Picture 2> are retained.
+  ```
+
+- **New `summary` section with a derived `[task type]` prefix** — `keyframe completion`,
+  `reference generation`, `audio reuse`, `audio reference`, combined with ` + ` in the
+  guide's own order. It is derived from what the references are *used for*, not from what
+  is connected: the guide warns that "the mere presence of video or audio does not
+  automatically create a corresponding task type", so a reference video supplying only
+  camera movement stays `reference generation`. The gear menu's **Task Type** field
+  overrides it, which is the only way to reach `video editing` and `video continuation` —
+  neither of which this node can produce on its own.
+
+- Frame anchors are also named inside their shot, as the guide's section 5.3 asks:
+  `[Shot 1] she enters. The shot begins from <Picture 2>.` The phrase goes after the
+  shot's own text, because a later shot opens `At 00:05.000, ` and a capitalised clause
+  cannot continue out of that comma.
+
+- **The chain node and the Director now share one reference loader.** The chain had grown
+  its own copy that ignored the `ref_images` socket entirely and never fitted a keyframe to
+  the canvas, so a chained render silently dropped references the Director would have sent.
+
+- **The live preview says when it cannot count.** Images arriving on the `ref_images`
+  socket are an upstream batch that does not exist until the graph runs, so the preview
+  could not number around them and silently showed `<Picture 2>` where the render would
+  send `<Picture 5>`. It now warns instead of quietly disagreeing.
+
+- Removed a note-pruning path that parsed `<Picture N>` back out of finished sentences to
+  drop trimmed references. Declarations are now built after the caps have trimmed, so
+  there is nothing to prune — and the per-type caps made that path unreachable anyway
+  (`images + videos` is at most 12 on its own, so the audio bucket always absorbs the
+  excess).
+
 ## 0.1.5
 
 - **Picture notes in `Refs ON` use the reference guide's own phrasing**

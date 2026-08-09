@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.5-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.2.0-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -43,6 +43,14 @@ see the exact prompt the model will receive while you are still editing it.
 ---
 
 ## News
+
+**0.2.0** · 2026-08-09 — full reference mode. A reference is no longer always a character
+and no longer always followed exactly: subject slots carry a **kind** (scene, prop, style,
+…) and every reference carries a **retention marker** from `fully_preserved` to
+`weak_reference`. Timeline images can be frame anchors, storyboard references, or
+subject-defining images that get no `<Picture>` entry at all. Prompts gain a `summary`
+section with a derived `[task type]` prefix, and `retention_analysis` now uses the guide's
+own line format.
 
 **0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
 phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
@@ -96,8 +104,8 @@ Four nodes, category **MiniMax H3**:
 Editing features carried over from LTX Director: main track, reference-video track, audio
 track, ruler in seconds or frames, drag / resize / copy / paste, prompt zones per segment,
 waveform preview, filename labels, gear menu, workspace folder, chunked upload for large
-videos, drag-and-drop straight onto the node, and the `@char1` / `@char2` / `@char3`
-character slots including the optional local VLM "Analyze" button (Ollama / LM Studio /
+videos, drag-and-drop straight onto the node, and the `@ref1` … `@ref9` subject
+slots including the optional local VLM "Analyze" button (Ollama / LM Studio /
 any OpenAI-compatible endpoint) with automatic VRAM release before a run.
 
 ## Requirements
@@ -175,7 +183,7 @@ ComfyUI/models/
 | Toolbar switch | Checkpoint | Use it for |
 |---|---|---|
 | **Refs OFF** | `minimax_h3_fl2va_*` | text→video, and first/last keyframes from the timeline |
-| **Refs ON** | `minimax_h3_ref2va_*` | character slots, reference images, reference videos, reference audio |
+| **Refs ON** | `minimax_h3_ref2va_*` | subject slots, reference images, reference videos, reference audio |
 
 Connect both to the Director's two model inputs and the toolbar switch picks the right
 one. Connecting only one is fine — the node warns rather than silently using the wrong path.
@@ -234,6 +242,7 @@ readable; open them if you want to change sampler, scheduler or steps.
 | **Main** | prompt zones | `[Shot N]` entries with timestamps |
 | **Reference video** | video clips | `<Video k>` motion/style references |
 | **Audio** | music, SFX | `<Audio j>` reference and/or the muxed soundtrack |
+| **Subject slots** | images | `<Subject N>` definitions — people, scenes, props, styles |
 
 ### Reference limits
 
@@ -242,7 +251,7 @@ These are enforced, with a warning naming exactly what was dropped:
 
 | Limit | Value |
 |---|---|
-| Reference images | ≤ 9 — the three character slots *and* the `ref_images` input share this pool |
+| Reference images | ≤ 9 — the subject slots *and* the `ref_images` input share this pool |
 | Reference videos | ≤ 3 clips, each 2–15 s, **≤ 15 s total** |
 | Reference audio | ≤ 3 clips |
 | **All types together** | **≤ 12 files** |
@@ -253,14 +262,61 @@ Anything you drop on a track is uploaded to `ComfyUI/input/whatdreamscost/`. Tha
 same folder LTX Director uses, deliberately — if you run both, assets and saved timelines
 carry over between them.
 
-### Character slots and the Analyze button
+### Subject slots and the Analyze button
 
-Drop a face or a full-body shot into `@char1` … `@char3` and write `@char1` in a prompt;
-it expands to `<Subject 1>` (MiniMax notation) or `<Picture 1>` (ComfyUI notation) and the
-image is attached as a reference. This is the **Refs ON (ref2va)** path.
+Drop an image into a slot and write `@ref1` in a prompt; it expands to `<Subject 1>`
+(MiniMax notation) or `<Picture 1>` (ComfyUI notation) and the image is attached as a
+reference. This is the **Refs ON (ref2va)** path. `@char1` … `@char3` still work, so
+prompts written against the old three-slot panel keep resolving.
+
+A slot is **not** only for characters. The reference guide defines `<Subject N>` as any
+reusable visible content — "people, animals, or objects; scenes, backgrounds, or
+environments; clothing, props, interfaces, or visual effects; styles, actions,
+expressions, or poses" — so each slot carries a **kind** telling the prompt what it is:
+
+| Control | What it does |
+|---|---|
+| **kind** | Supplies the noun in `<Subject N> is the environment shown in <Picture 1>.` A typed description replaces it entirely. |
+| **retention** | How closely to follow it. Written into `retention_analysis` verbatim. |
+
+Slots start at three and a new empty one appears as you fill them, up to the nine-image
+cap.
+
+### How closely a reference is followed
+
+Every reference carries a **retention marker** — the guide's term for "exactly or
+loosely". These are fixed English values written straight into the prompt, so the
+dropdowns show them under their own names rather than friendlier ones:
+
+| Marker | Meaning |
+|---|---|
+| `fully_preserved` | The defined role of the referenced content is fully preserved |
+| `partially_preserved` | Still used, but some defined characteristics change |
+| `attribute_transfer` | Its characteristics move onto a different target subject |
+| `weak_reference` | Broad similarity in style, category, composition or atmosphere only |
+
+Audio has its own set, because copying a signal and imitating one are different jobs:
+`fully_copy`, `partially_copy`, `reference`, `weak_reference`.
+
+Right-click any reference — a timeline image, a reference video, an audio clip — to set
+its marker. Subject slots have theirs in the panel.
+
+### What an image is *for*
+
+The guide only gives an image its own `<Picture N>` entry when the image really is a
+frame. Right-click a timeline image to say which of the three it is:
+
+| Used as | Result |
+|---|---|
+| **frame anchor** (default) | `<Picture 2> is the first frame of [Shot 1].` — its position on the timeline decides first / last / keyframe |
+| **storyboard** | `<Picture 3> is a storyboard reference for [Shot 2], defining its viewpoint, subject placement, and shot order.` |
+| **defines a subject** | No `<Picture>` entry at all. Cited inside a `<Subject N>` line instead, exactly as the guide requires for an image that "is used only to define a character, scene, costume, or style". |
+
+A subject-only image also stops being a keyframe, so it is no longer fitted to the output
+canvas — the full reference reaches the model instead of a cropped one.
 
 **Analyze** is optional and off the critical path. It sends the slot image to a local
-vision model and pastes back a one-line description, so `@char1` still means something in
+vision model and pastes back a one-line description, so `@ref1` still means something in
 **Refs OFF** mode, where H3 gets no image at all. Nothing is installed for you and nothing
 is sent anywhere unless you press the button.
 
@@ -285,12 +341,20 @@ Gear menu → **Prompt Format**. The default is **MiniMax**, the notation from t
 `VIDEO_PROMPT_WRITING_GUIDE`:
 
 ```
-subject_definitions: <Subject 1> is the character shown in <Picture 1>.
+subject_definitions: <Subject 1> is a baker in a flour-dusted apron, shown in <Picture 1>.
+<Subject 2> is the environment shown in <Picture 2>. <Picture 3> is the first frame of [Shot 1].
 
-retention_analysis: Keep the identity, face and clothing of <Subject 1> consistent across every shot.
+summary: [keyframe completion + reference generation] The target video follows <Subject 1>
+opening the bakery.
 
-detailed_description: Live-action, cinematic. [Shot 1] the baker opens the shutters
-[Shot 2] At 00:01.500, <Subject 1> lifts the loaf onto the counter
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - the identity, face and clothing of <Subject 1> are retained.
+<Subject 2> (appears in [Shot 1]): weak_reference - only a broad similarity to <Subject 2> in style, category, composition and atmosphere is kept.
+<Picture 3> ([Shot 1] first frame): fully_preserved - the framing and composition of <Picture 3> are retained.
+
+detailed_description: Live-action, cinematic. [Shot 1] the baker opens the shutters.
+The shot begins from <Picture 3>. [Shot 2] At 00:01.500, <Subject 1> lifts the loaf onto
+the counter
 
 overall_soundscape: street ambience, a distant tram
 non_diegetic_music: soft piano
@@ -298,6 +362,14 @@ non_diegetic_music: soft piano
 
 The first shot carries no timestamp; every later cut carries a strictly increasing
 `MM:SS.mmm` one. Sections appear only when there is something real to put in them.
+
+`summary` opens with a **task type** derived from what the references are actually used
+for — `keyframe completion`, `reference generation`, `audio reuse`, `audio reference`,
+joined with ` + `. A reference video that only supplies camera movement counts as
+`reference generation`, never `video editing`; the guide is explicit that "the mere
+presence of video or audio does not automatically create a corresponding task type". The
+gear menu's **Task Type** field overrides it, which is how you reach `video editing` and
+`video continuation` — neither of which this node has a path to produce on its own.
 
 The two sound sections have their own boxes under the Global Prompt. What you type there
 goes straight into `overall_soundscape` and `non_diegetic_music`. Leave them empty and the
@@ -310,8 +382,13 @@ working. A filled box wins over a lifted line.
 **`<Subject N>` vs `<Picture N>`** is worth knowing: the guide reserves `<Subject N>` for
 reusable content — a person, a place, a style — and `<Picture N>` for concrete frame
 anchors. ComfyUI's tokenizer only ever labels images `<Picture i>`, so
-`subject_definitions` binds the two. That is what lets a character keep one name across
-every cut. `@char1` therefore expands to `<Subject 1>` here.
+`subject_definitions` binds the two. That is what lets a subject keep one name across
+every cut. `@ref1` therefore expands to `<Subject 1>` here.
+
+Note what that means for a subject slot's image: it is passed to the model as
+`<Picture 1>`, but it gets **no** `<Picture 1>` declaration of its own. The guide is
+explicit — an image used only to define something is cited inside its `<Subject N>` line
+instead. Only real frame and storyboard anchors are declared as pictures.
 
 **ComfyUI** switches to `[0s-1.5s] …`, the notation the ComfyUI H3 templates use. Same
 timeline, same references, only the wording changes — so it is a fair A/B.

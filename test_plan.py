@@ -43,9 +43,11 @@ def check_not_in(name, needle, haystack):
     return ok
 
 
-def img(start, length, name="a.png", prompt="", end_frame=False):
-    return {"type": "image", "start": start, "length": length, "imageFile": name,
-            "fileName": name, "prompt": prompt, "isEndFrame": end_frame}
+def img(start, length, name="a.png", prompt="", end_frame=False, **extra):
+    d = {"type": "image", "start": start, "length": length, "imageFile": name,
+         "fileName": name, "prompt": prompt, "isEndFrame": end_frame}
+    d.update(extra)          # refRole / refKind / refNote / retention
+    return d
 
 
 def tl(segments, ref_mode="OFF", **extra):
@@ -112,12 +114,18 @@ short = compile(tl([img(0, 144, "a.png", prompt="she enters"),
 
 check_not_in("ref2va never says 'opening frame'", "opening frame", flush["prompt"])
 check_not_in("ref2va never says 'closing frame'", "closing frame", flush["prompt"])
-check_in("the opening image uses the guide's phrasing",
-         "[Shot 1] begins from <Picture 1>.", flush["prompt"])
-check_in("the closing image uses the guide's phrasing",
-         "[Shot 2] ends on <Picture 2>.", flush["prompt"])
+check_in("the opening image is declared as a first frame (guide 2.2)",
+         "<Picture 1> is the first frame of [Shot 1].", flush["prompt"])
+check_in("the closing image is declared as a last frame (guide 2.2)",
+         "<Picture 2> is the last frame of [Shot 2].", flush["prompt"])
+check_in("the opening image is also named in the body (guide 5.3)",
+         "The shot begins from <Picture 1>.", flush["prompt"])
+check_in("the closing image is also named in the body (guide 5.3)",
+         "The shot ends on <Picture 2>.", flush["prompt"])
 check_in("a middle image is a keyframe, with its time",
-         "The keyframe of [Shot 2] corresponds to <Picture 2>, at 6s.", short["prompt"])
+         "<Picture 2> is a keyframe of [Shot 2], at 6s.", short["prompt"])
+check_in("a middle image uses the guide's keyframe phrasing in the body",
+         "The shot's keyframe corresponds to <Picture 2>.", short["prompt"])
 check("the phrasing no longer flips on where a segment ends",
       ("begins from <Picture 1>" in flush["prompt"]
        and "begins from <Picture 1>" in short["prompt"]), True)
@@ -127,18 +135,20 @@ check_not_in("picture notes carry no filenames — the guide has no such notion"
 # an image whose own segment carries no text has no shot number in the body to point at
 noshot = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")], ref_mode="ON"))
 check_in("without a numbered shot the opening image still reads naturally",
-         "The video begins from <Picture 1>.", noshot["prompt"])
+         "<Picture 1> is the first frame of the target video.", noshot["prompt"])
 check_in("without a numbered shot the closing image still reads naturally",
-         "The video ends on <Picture 2>.", noshot["prompt"])
+         "<Picture 2> is the last frame of the target video.", noshot["prompt"])
 check_not_in("no shot number is invented when the body has none",
              "[Shot", noshot["prompt"])
 mixed = compile(tl([img(0, 96, "a.png", prompt="she enters"),
                     img(96, 96, "b.png"),
                     img(192, 96, "c.png", prompt="she leaves")], ref_mode="ON"))
 check_in("shot numbers follow the body, which counts only shots with text",
-         "[Shot 2] ends on <Picture 3>.", mixed["prompt"])
+         "<Picture 3> is the last frame of [Shot 2].", mixed["prompt"])
 check_in("the untexted middle image falls back to a composition anchor",
          "<Picture 2> is a composition anchor at 4s.", mixed["prompt"])
+check_not_in("an anchor with no shot to sit in gets no body phrase",
+             "keyframe corresponds", mixed["prompt"])
 # the role itself must survive: it picks which frame of a video segment is taken,
 # and whether it is fitted to the canvas (minimax_director.py, ref_image_tensors)
 check("the closing image keeps its role on the slot",
@@ -182,9 +192,11 @@ withchar = compile(tl([img(0, 144, "a.png", prompt="she enters"),
 check("a character takes <Picture 1> ahead of the timeline",
       withchar["ref_image_slots"][0]["source"], "char")
 check_in("timeline images number after the character",
-         "[Shot 1] begins from <Picture 2>", withchar["prompt"])
-check_in("the character becomes a named subject",
-         "<Subject 1> is the character shown in <Picture 1>.", withchar["prompt"])
+         "<Picture 2> is the first frame of [Shot 1].", withchar["prompt"])
+check_in("a slot with a description becomes a named subject",
+         "<Subject 1> is a woman in a red coat, shown in <Picture 1>.", withchar["prompt"])
+check_not_in("a slot image earns no standalone <Picture> entry of its own (guide 2.2)",
+             "<Picture 1> is", withchar["prompt"])
 check("ref_images input slots sit between character and timeline",
       [s["source"] for s in compile(tl([img(0, 144)], ref_mode="ON", characters=chars),
                                     extra_ref_image_count=2)["ref_image_slots"]],
@@ -202,6 +214,263 @@ check_not_in("no raw @char1 survives", "@char1", sub["prompt"])
 sub_off = compile(tl([img(0, 144, "a.png", prompt="@char1 turns around")], characters=chars))
 check_in("@char1 resolves to the description with refs off",
          "a woman in a red coat turns around", sub_off["prompt"])
+
+nine = [{"images": [{"b64": "x", "name": "%d.png" % i}], "description": "subject %d" % i}
+        for i in range(9)]
+tags = compile(tl([img(0, 144, "a.png", prompt="@ref9 and @char1 meet")],
+                  ref_mode="ON", subjects=nine))
+check_in("@ref9 reaches the ninth slot", "<Subject 9> and <Subject 1> meet", tags["prompt"])
+check_not_in("no raw @ref tag survives", "@ref", tags["prompt"])
+
+# ------------------------------------------------- full-reference: the whole prompt
+# The one check that pins the *entire* output against references/ref-en.txt: section set
+# and order (subject_definitions, summary, retention_analysis, detailed_description, then
+# the sound fields), one declaration per label, one retention line per label, the markers
+# spelled exactly as the guide's fixed values, and the guide's in-body phrasing for frame
+# anchors. Substring checks elsewhere can all pass while the assembled prompt is wrong.
+spec_tl = {
+    "reference_mode": "ON", "prompt_format": "minimax",
+    "global_prompt": "The target video uses a realistic multi-camera sitcom style.",
+    "subjects": [
+        {"images": [{"b64": "x", "name": "shop.png"}], "kind": "environment",
+         "description": "the coffee shop with an exposed brick wall and an orange tufted sofa",
+         "retention": "fully_preserved"},
+        {"images": [{"b64": "y", "name": "dog.png"}], "kind": "animal",
+         "description": "a fluffy white Samoyed with a curved tail",
+         "retention": "partially_preserved"}],
+    "segments": [img(0, 120, "open.png", prompt="@ref1 is empty except for @ref2 on the sofa"),
+                 img(120, 120, "end.png", prompt="@ref2 lunges for the cookie")],
+    "audioSegments": [{"audioFile": "vo.wav", "start": 0, "length": 120,
+                       "retention": "fully_copy"}],
+    "overall_soundscape": "Soft indoor coffee-shop room tone throughout.",
+    "non_diegetic_music": "N/A"}
+SPEC_GOLDEN = (
+    "subject_definitions: "
+    "<Subject 1> is the coffee shop with an exposed brick wall and an orange tufted sofa, "
+    "shown in <Picture 1>. "
+    "<Subject 2> is a fluffy white Samoyed with a curved tail, shown in <Picture 2>. "
+    "<Picture 3> is the first frame of [Shot 1]. "
+    "<Picture 4> is the last frame of [Shot 2]. "
+    "<Audio 1> is a reference audio clip: its signal is reused in the target video."
+    "\n\n"
+    "summary: [keyframe completion + reference generation + audio reuse]"
+    "\n\n"
+    "retention_analysis:\n"
+    "<Subject 1> (appears in [Shot 1]): fully_preserved - "
+    "the layout, furnishing and lighting of <Subject 1> are retained.\n"
+    "<Subject 2> (appears in [Shot 1], [Shot 2]): partially_preserved - "
+    "<Subject 2> is still used, with some of its defined characteristics changed.\n"
+    "<Picture 3> ([Shot 1] first frame): fully_preserved - "
+    "the framing and composition of <Picture 3> are retained.\n"
+    "<Picture 4> ([Shot 2] last frame): fully_preserved - "
+    "the framing and composition of <Picture 4> are retained.\n"
+    "<Audio 1>: fully_copy - "
+    "<Audio 1> is reused as the target video's complete final audio track."
+    "\n\n"
+    "detailed_description: The target video uses a realistic multi-camera sitcom style. "
+    "[Shot 1] <Subject 1> is empty except for <Subject 2> on the sofa. "
+    "The shot begins from <Picture 3>. "
+    "[Shot 2] At 00:05.000, <Subject 2> lunges for the cookie. "
+    "The shot ends on <Picture 4>."
+    "\n\n"
+    "overall_soundscape: Soft indoor coffee-shop room tone throughout."
+    "\n\n"
+    "non_diegetic_music: N/A")
+check("the whole full-reference prompt matches the guide",
+      compile(spec_tl, duration_f=240, use_custom_audio=True)["prompt"], SPEC_GOLDEN)
+
+# ------------------------------------------------- old timelines still read
+# A workflow saved before subject kinds existed writes `characters` and carries neither a
+# kind nor a marker. It has to keep planning, and to plan the same way a timeline written
+# today with the defaults does — the defaults were chosen to reproduce the old wording.
+legacy_segs = [img(0, 144, "a.png", prompt="she enters"),
+               img(144, 144, "b.png", prompt="she arrives")]
+legacy = compile(tl(legacy_segs, ref_mode="ON",
+                    characters=[{"images": [{"b64": "x", "name": "c.png"}],
+                                 "description": "a woman in a red coat"}]))
+modern = compile(tl(legacy_segs, ref_mode="ON",
+                    subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                               "description": "a woman in a red coat",
+                               "kind": "person", "retention": "fully_preserved"}]))
+check("the old `characters` key plans identically to `subjects`",
+      legacy["prompt"], modern["prompt"])
+check("`subjects` wins when a timeline somehow carries both",
+      compile(tl([], ref_mode="ON",
+                 characters=[{"images": [{"b64": "x", "name": "old.png"}],
+                              "description": "the old one"}],
+                 subjects=[{"images": [{"b64": "y", "name": "new.png"}],
+                            "description": "the new one"}]))["prompt"].count("the new one"), 1)
+check("a slot with neither kind nor marker still gets both",
+      (plan.sanitize_kind(None), plan.sanitize_retention(None)),
+      (plan.SUBJECT_KIND_DEFAULT, plan.RETENTION_DEFAULT))
+
+# ------------------------------------------------- retention markers
+# "These markers are fixed English values in the output format" — so they are emitted
+# verbatim, and anything the editor might send that is not one of them is clamped rather
+# than passed through into the prompt.
+for marker in plan.RETENTION_VISIBLE:
+    got = compile(tl([img(0, 144)], ref_mode="ON",
+                     subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                "description": "a woman", "retention": marker}]))["prompt"]
+    check_in("%s reaches the prompt verbatim" % marker, ": %s - " % marker, got)
+for marker in plan.RETENTION_AUDIO:
+    got = compile(tl([img(0, 144)], ref_mode="ON",
+                     audioSegments=[{"audioFile": "a.wav", "start": 0, "length": 96,
+                                     "retention": marker}]),
+                  use_custom_audio=True)["prompt"]
+    check_in("audio marker %s reaches the prompt verbatim" % marker,
+             "<Audio 1>: %s - " % marker, got)
+
+check("an invented marker is clamped, never emitted",
+      plan.sanitize_retention("very_strongly_preserved"), plan.RETENTION_DEFAULT)
+check("a visible marker is rejected on an audio label",
+      plan.sanitize_retention("attribute_transfer", audio=True), plan.RETENTION_AUDIO_DEFAULT)
+check("an audio marker is rejected on a visible label",
+      plan.sanitize_retention("fully_copy"), plan.RETENTION_DEFAULT)
+check("markers are matched case-insensitively",
+      plan.sanitize_retention("Weak_Reference"), "weak_reference")
+bogus = compile(tl([img(0, 144)], ref_mode="ON",
+                   subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                              "description": "a woman", "retention": "make_it_pop"}]))
+check_not_in("the invented marker never appears", "make_it_pop", bogus["prompt"])
+
+# a hand-written note replaces the generated one, and is punctuated if it wasn't
+noted = compile(tl([img(0, 144)], ref_mode="ON",
+                   subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                              "description": "a woman", "retention": "attribute_transfer",
+                              "retentionNote": "her coat colour moves to the stallholder"}]))
+check_in("a written retention note wins over the generated one",
+         "attribute_transfer - her coat colour moves to the stallholder.", noted["prompt"])
+
+# ------------------------------------------------- subject kinds
+# <Subject N> is not a character slot: "people, animals, or objects; scenes, backgrounds,
+# or environments; clothing, props, interfaces, or visual effects; styles, actions,
+# expressions, or poses".
+for kind, noun in (("environment", "the environment"), ("prop", "the prop"),
+                   ("style", "the visual style"), ("animal", "the animal")):
+    got = compile(tl([img(0, 144)], ref_mode="ON",
+                     subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                "kind": kind}]))["prompt"]
+    check_in("a %s subject names itself as one" % kind,
+             "<Subject 1> is %s shown in <Picture 1>." % noun, got)
+check("an unknown kind falls back rather than inventing a noun",
+      plan.sanitize_kind("spaceship"), plan.SUBJECT_KIND_DEFAULT)
+check_in("a description replaces the kind noun entirely",
+         "<Subject 1> is a rain-slicked night market, shown in <Picture 1>.",
+         compile(tl([img(0, 144)], ref_mode="ON",
+                    subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                               "kind": "environment",
+                               "description": "a rain-slicked night market"}]))["prompt"])
+check_in("the retained detail follows the kind, not the word 'character'",
+         "the palette, texture and grade of <Subject 1> are retained.",
+         compile(tl([img(0, 144)], ref_mode="ON",
+                    subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                               "kind": "style"}]))["prompt"])
+
+# ------------------------------------------------- image reference roles
+# "If an image is used only to define a character, scene, costume, or style, do not create
+# a standalone picture entry. Instead, cite the image source inside the corresponding
+# <Subject N> definition."
+story = compile(tl([img(0, 144, "sb.png", prompt="the crowd parts", refRole="storyboard")],
+                   ref_mode="ON"))
+check_in("a storyboard image says which shot it plans and what it defines",
+         "<Picture 1> is a storyboard reference for [Shot 1], defining its viewpoint, "
+         "subject placement, and shot order.", story["prompt"])
+check_in("a storyboard image retains planning, not framing",
+         "the viewpoint, subject placement and shot order of <Picture 1> are retained.",
+         story["prompt"])
+
+subj_role = compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                        img(144, 144, "coat.png", prompt="a wide shot", refRole="subject",
+                            refKind="clothing", refNote="a long red wool coat")],
+                       ref_mode="ON"))
+check_in("a subject-only image is cited inside a subject definition",
+         "<Subject 1> is a long red wool coat, shown in <Picture 2>.", subj_role["prompt"])
+check_not_in("a subject-only image earns no standalone picture entry",
+             "<Picture 2> is", subj_role["prompt"])
+check("a subject-only image is no longer a keyframe",
+      subj_role["ref_image_slots"][1].get("keyframe"), None)
+check("...while an untouched image still is",
+      subj_role["ref_image_slots"][0].get("keyframe"), plan.ROLE_FIRST)
+check("an unknown role falls back to the timeline's own reading",
+      plan.sanitize_ref_role("interpretive"), plan.REF_ROLE_AUTO)
+
+# ------------------------------------------------- summary task types
+prefix = lambda p: p["prompt"].split("summary: ")[1].split("\n")[0] if "summary: " in p["prompt"] else ""
+check("a plain keyframe timeline is keyframe completion",
+      prefix(compile(tl([img(0, 288, "a.png", prompt="she waits")], ref_mode="ON"))),
+      "[keyframe completion]")
+check("a slot image with no frame anchor is reference generation",
+      prefix(compile(tl([], ref_mode="ON", subjects=chars))), "[reference generation]")
+check("copied audio is reuse, referenced audio is reference",
+      (prefix(compile(tl([], ref_mode="ON"),
+                      use_custom_audio=True)),
+       prefix(compile(tl([], ref_mode="ON",
+                         audioSegments=[{"audioFile": "a.wav", "start": 0, "length": 96,
+                                         "retention": "partially_copy"}]),
+                      use_custom_audio=True))),
+      ("", "[audio reuse]"))
+check("task types combine in the guide's order and never repeat",
+      prefix(compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                         img(144, 144, "b.png", prompt="a plan", refRole="storyboard")],
+                        ref_mode="ON",
+                        audioSegments=[{"audioFile": "a.wav", "start": 0, "length": 96}]),
+                     use_custom_audio=True)),
+      "[keyframe completion + reference generation + audio reference]")
+check("a reference video alone never claims video editing",
+      prefix(compile(tl([], ref_mode="ON",
+                        motionSegments=[{"videoFile": "v.mp4", "fileName": "v.mp4",
+                                         "start": 0, "length": 120}]))),
+      "[reference generation]")
+check("the override replaces the derived prefix",
+      prefix(compile(tl([img(0, 144)], ref_mode="ON",
+                        task_type_override="video continuation + keyframe completion"))),
+      "[video continuation + keyframe completion]")
+check("the override tolerates brackets the user typed",
+      plan.task_type_prefix([], [], [], "[video editing]"), "[video editing]")
+check("refs off writes no task prefix",
+      "summary:" in compile(tl([img(0, 144)]))["prompt"], False)
+check_in("a written summary follows the prefix",
+         "summary: [keyframe completion] She crosses the market.",
+         compile(tl([img(0, 288, "a.png", prompt="she waits")], ref_mode="ON",
+                    summary="She crosses the market."))["prompt"])
+
+# ------------------------------------------------- the cap leaves nothing dangling
+# The 12-file cap trims from the back. Every declaration and retention line has to
+# describe a reference that survived, and nothing may reference a dropped ordinal.
+# 9 images + 3 videos + 3 audios is 15 files, so three must go — audio first, then video,
+# then images from the back.
+capped = compile(tl([img(i * 20, 20, "%d.png" % i, prompt="shot %d" % i) for i in range(9)],
+                    ref_mode="ON",
+                    motionSegments=[{"videoFile": "v%d.mp4" % i, "fileName": "v%d.mp4" % i,
+                                     "start": 0, "length": 96} for i in range(3)],
+                    audioSegments=[{"audioFile": "a%d.wav" % i, "start": 0, "length": 96}
+                                   for i in range(3)]),
+                 use_custom_audio=True)
+total = (len(capped["ref_image_slots"]) + len(capped["ref_video_segs"])
+         + len(capped["ref_audio_segs"]))
+check("the total-file cap trims to the model card's limit", total, plan.MAX_REF_FILES)
+check("audio is dropped before video or images", len(capped["ref_audio_segs"]), 0)
+check("the images all survive", len(capped["ref_image_slots"]), plan.MAX_REF_IMAGES)
+check_not_in("no dropped audio is left declared", "<Audio 1>", capped["prompt"])
+
+# The per-type caps mean images can never actually be trimmed: images + videos is at most
+# 12 on its own, so the excess is never larger than the audio bucket that is emptied
+# first. Assert that rather than pretend to test a path nothing can reach — and check
+# directly that declarations are built from the surviving slots, which is what makes the
+# ordering safe if a cap ever moves.
+check("the excess never outgrows the audio bucket that absorbs it",
+      [(i, v, a) for i in range(plan.MAX_REF_IMAGES + 1)
+       for v in range(plan.MAX_REF_VIDEOS + 1) for a in range(plan.MAX_REF_AUDIOS + 1)
+       if i + v + a - plan.MAX_REF_FILES > a], [])
+
+only_two = plan.build_subject_definitions(
+    [], [{"source": "timeline", "ref_role": "auto", "picture_role": plan.ROLE_FIRST,
+          "kind": "person", "retention": "fully_preserved", "note": "",
+          "shot_no": 1, "at": "0s"}], [], [])
+check("declarations describe exactly the slots handed in", len(only_two[0]), 1)
+check_not_in("nothing is declared for a slot that was trimmed away",
+             "<Picture 2>", " ".join(only_two[0]))
 
 # ------------------------------------------------- issue #7: soundscape / music
 audio = tl([img(0, 144)], ref_mode="ON")
