@@ -667,6 +667,10 @@ const STYLES = `
   .mmxd-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
   .mmxd-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
   .mmxd-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
+  /* the empty slot's drop target: takes the same slack the previews row takes, so the
+     text boxes below it sit at the same height whether or not an image has been dropped */
+  .mmxd-character-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; flex: 1 1 auto; min-height: 44px; pointer-events: none; }
+  .mmxd-character-dropzone .mmxd-character-placeholder { margin-top: 4px; }
   /* the only part of a slot that flexes, so dragging the panel taller grows the images */
   .mmxd-character-previews-row { display: flex; width: 100%; flex: 1 1 auto; min-height: 44px; gap: 4px; position: relative; }
   .mmxd-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
@@ -908,8 +912,8 @@ function subjectPanelHeight(slotCount, slotHeight) {
 }
 
 function emptySubjectSlot() {
-  return { images: [], description: "", kind: "person", retention: "fully_preserved",
-           retentionNote: "" };
+  return { images: [], description: "", shortName: "", kind: "person",
+           retention: "fully_preserved", retentionNote: "" };
 }
 
 // Old timelines wrote `characters` and had neither kind nor retention. Reading them back
@@ -920,6 +924,7 @@ function normaliseSubjectSlots(raw) {
   const out = list.slice(0, MAX_SUBJECT_SLOTS).map((c) => ({
     images: Array.isArray(c.images) ? c.images : [],
     description: c.description || "",
+    shortName: c.shortName || "",
     kind: SUBJECT_KIND_OPTIONS.some(o => o.value === c.kind) ? c.kind : "person",
     retention: RETENTION_OPTIONS.some(o => o.value === c.retention)
       ? c.retention : "fully_preserved",
@@ -2613,8 +2618,10 @@ class TimelineEditor {
       this.timeline.reference_mode = e.target.value;
       this.commitChanges();
       // the describes/retained strip only exists in ref2va, so it has to appear and
-      // disappear with the switch rather than waiting for the next selection change
+      // disappear with the switch rather than waiting for the next selection change —
+      // and the subject panel swaps `retained` for `called` on the same switch
       this.updateUIFromSelection();
+      this.updateCharacterSlotsUI();
     });
     this.refOptionSelect = refOptionSelect;
 
@@ -9584,10 +9591,15 @@ class TimelineEditor {
 
   // Three always visible, then one empty slot ahead of whatever is filled, so the panel
   // grows only as far as it is used instead of showing nine empty boxes on day one.
+  // A slot counts as used once it holds an image *or* a description. With refs off the
+  // image is discarded by the render, so a written subject is all a slot can ever be
+  // there — gating the panel on images alone capped that path at three empty boxes.
   visibleSlotCount() {
     const slots = this.subjectSlots();
     let filled = 0;
-    slots.forEach((s, i) => { if (s.images && s.images.length) filled = i + 1; });
+    slots.forEach((s, i) => {
+      if ((s.images && s.images.length) || (s.description || "").trim()) filled = i + 1;
+    });
     return Math.max(3, Math.min(MAX_SUBJECT_SLOTS, filled + 1));
   }
 
@@ -9848,9 +9860,23 @@ class TimelineEditor {
       const data = subjects[i] || emptySubjectSlot();
       slot.innerHTML = "";
 
-      if (data.images && data.images.length > 0) {
+      // A subject is a description first and an image second. The image is what earns it
+      // a <Subject N> label on the ref2va path; on fl2va the image is discarded by the
+      // render and the description is the whole subject. So the text boxes are always
+      // here, and only the controls that can actually reach the prompt come and go.
+      const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+      const hasImages = !!(data.images && data.images.length);
+
+      if (hasImages) {
         const previewsRow = document.createElement("div");
         previewsRow.className = "mmxd-character-previews-row";
+        if (!refsOn) {
+          // kept, because switching the toolbar back must not cost the upload — but said
+          // out loud, because fl2va sends no reference images at all
+          previewsRow.style.opacity = "0.45";
+          previewsRow.title = "Not sent on the fl2va path. Switch to 'Refs ON (ref2va)' "
+                            + "to use this image; the description below is used either way.";
+        }
 
         data.images.forEach((imgData, imgIdx) => {
           const imgWrapper = document.createElement("div");
@@ -9893,11 +9919,31 @@ class TimelineEditor {
         }
 
         slot.appendChild(previewsRow);
+      } else {
+        // Still the drop target for the whole slot, but no longer the whole slot: it
+        // flexes so the text boxes below it keep their fixed height.
+        const zone = document.createElement("div");
+        zone.className = "mmxd-character-dropzone";
 
-        // Two captioned boxes: what the subject IS (the <Subject N> definition) and what
-        // has to survive into the target video (the retention_analysis line). They are
-        // different sentences in different sections of the prompt, so writing one has
-        // never been a way to say the other.
+        const label = document.createElement("div");
+        label.className = "mmxd-character-label";
+        label.textContent = `@ref${i + 1}`;
+
+        const placeholder = document.createElement("div");
+        placeholder.className = "mmxd-character-placeholder";
+        placeholder.innerHTML = `${ICONS.upload}<br>Drop Sheet`;
+
+        zone.appendChild(label);
+        zone.appendChild(placeholder);
+        slot.appendChild(zone);
+      }
+
+      {
+        // Captioned boxes, because two bare textareas in one box say nothing about which
+        // is which. Which ones appear is a question of what can reach the prompt:
+        // `retained` and the markers only exist once the slot has a picture to declare on
+        // the ref2va path, and `called` only matters where the subject has no <Subject N>
+        // label and lives in the prose instead.
         const makeSlotField = (label, key, placeholder, first) => {
           const field = document.createElement("div");
           field.className = "mmxd-character-field" + (first ? " mmxd-field-first" : "");
@@ -9927,46 +9973,55 @@ class TimelineEditor {
           return area;
         };
 
-        makeSlotField("describes", "description", "a woman in a red coat…", true);
-        makeSlotField("retained", "retentionNote",
-                      "identity, face and clothing — leave empty for the default");
+        const desc = makeSlotField("describes", "description",
+                                   "a woman in a red coat…", true);
+        // Typing does not redraw the panel — that would wipe the box mid-word — so a
+        // slot that has just been described claims its successor once focus leaves it.
+        desc.addEventListener("blur", () => {
+          if (this.characterSlots.length !== this.visibleSlotCount()) {
+            this.updateCharacterSlotsUI();
+          }
+        });
+
+        if (refsOn && hasImages) {
+          makeSlotField("retained", "retentionNote",
+                        "identity, face and clothing — leave empty for the default");
+        } else {
+          // No <Subject N> to name this by, so the guide's own habit applies: written out
+          // in full where it first appears, then a short handle, or the same paragraph
+          // of description walks in again every shot as somebody new.
+          makeSlotField("called", "shortName",
+                        "the baker — after the first mention");
+        }
 
         // What this subject IS, and how closely to follow it. The kind only supplies a
         // noun for the definition line when no description is typed, so a description
         // always wins; the retention marker is written into retention_analysis verbatim.
-        const row = document.createElement("div");
-        row.className = "mmxd-ref-controls";
+        // Both are ref2va-only, and both need a picture behind them to be declared on.
+        if (refsOn && hasImages) {
+          const row = document.createElement("div");
+          row.className = "mmxd-ref-controls";
 
-        const kindSel = createMenuSelect(SUBJECT_KIND_OPTIONS, { width: "100%" });
-        kindSel.value = data.kind || "person";
-        kindSel.title = "What this subject is. A typed description replaces it.";
-        kindSel.addEventListener("change", () => {
-          subjects[i].kind = kindSel.value;
-          this.commitChanges();
-        });
+          const kindSel = createMenuSelect(SUBJECT_KIND_OPTIONS, { width: "100%" });
+          kindSel.value = data.kind || "person";
+          kindSel.title = "What this subject is. A typed description replaces it.";
+          kindSel.addEventListener("change", () => {
+            subjects[i].kind = kindSel.value;
+            this.commitChanges();
+          });
 
-        const retSel = createMenuSelect(RETENTION_OPTIONS, { width: "100%" });
-        retSel.value = data.retention || "fully_preserved";
-        retSel.title = RETENTION_TIP;
-        retSel.addEventListener("change", () => {
-          subjects[i].retention = retSel.value;
-          this.commitChanges();
-        });
+          const retSel = createMenuSelect(RETENTION_OPTIONS, { width: "100%" });
+          retSel.value = data.retention || "fully_preserved";
+          retSel.title = RETENTION_TIP;
+          retSel.addEventListener("change", () => {
+            subjects[i].retention = retSel.value;
+            this.commitChanges();
+          });
 
-        row.appendChild(kindSel);
-        row.appendChild(retSel);
-        slot.appendChild(row);
-      } else {
-        const label = document.createElement("div");
-        label.className = "mmxd-character-label";
-        label.textContent = `@ref${i + 1}`;
-
-        const placeholder = document.createElement("div");
-        placeholder.className = "mmxd-character-placeholder";
-        placeholder.innerHTML = `${ICONS.upload}<br>Drop Sheet`;
-
-        slot.appendChild(label);
-        slot.appendChild(placeholder);
+          row.appendChild(kindSel);
+          row.appendChild(retSel);
+          slot.appendChild(row);
+        }
       }
     }
   }
@@ -10062,7 +10117,9 @@ class TimelineEditor {
       const out = [];
       for (let i = 0; i < slots.length && i < MAX_SUBJECT_SLOTS; i++) {
         const s = slots[i] || {};
-        if (!(s.images && s.images.length)) continue;
+        // a description with no image is a whole subject on the fl2va path, where the
+        // image would be discarded anyway — so an empty slot is one with neither
+        if (!(s.images && s.images.length) && !(s.description || "").trim()) continue;
         const desc = (s.description || "").trim();
         out.push({
           tag: `@ref${i + 1}`,
@@ -10309,6 +10366,7 @@ class TimelineEditor {
       subjects: this.subjectSlots().map(c => ({
         images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
         description: c.description || "",
+        shortName: c.shortName || "",
         kind: c.kind || "person",
         retention: c.retention || "fully_preserved",
         retentionNote: c.retentionNote || ""
@@ -11806,6 +11864,7 @@ class TimelineEditor {
         subjects: this.subjectSlots().map(c => ({
           images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
           description: c.description || "",
+          shortName: c.shortName || "",
           kind: c.kind || "person",
           retention: c.retention || "fully_preserved",
           retentionNote: c.retentionNote || ""

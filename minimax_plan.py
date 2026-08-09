@@ -137,26 +137,43 @@ def fmt_seconds(value):
     return "%.1fs" % rounded
 
 
-def substitute_char_tags(text, replacements):
+CHAR_TAG_RE = re.compile(r"@(?:character|char|ref)(\d+)")
+
+
+def substitute_char_tags(text, replacements, later=None, seen=None):
     """Swap @ref1/@character1/@char1 .. @ref9 for their resolved text.
 
     A slot is no longer necessarily a character, so @refN is the name that fits what the
     slots now hold. @characterN/@charN keep working for every slot — prompts written
     against the old three-slot panel must not break.
 
-    Highest slot first: @ref1 is a prefix of @ref10 today only in spirit, but @char1 *is*
-    a prefix of nothing while @ref1 would be of @ref11 if the cap ever moved. Descending
-    order makes that class of bug impossible rather than merely absent.
+    The whole number is read at once, so a slot number that does not exist is left alone
+    rather than half-substituted: @ref11 used to come out as the slot-1 value with a
+    stray "1" welded to it.
+
+    `later` is the base guide's rule for a subject that has no <Subject N> label to lean
+    on. There the identity lives in the prose, so it is written out in full where the
+    subject first appears and named by a short handle afterwards — otherwise "a woman in
+    a red coat" walks into every shot as a different woman. Tags resolve left to right
+    and `seen` carries that across the global block and each shot in turn, so "first"
+    means first in the finished video rather than first in whichever string this is.
     """
     if not text:
         return text or ""
-    for slot in range(MAX_SUBJECT_SLOTS, 0, -1):
+    if seen is None:
+        seen = set()
+
+    def swap(match):
+        slot = int(match.group(1))
         value = replacements.get(slot)
         if not value:
-            continue
-        for tag in ("@character%d" % slot, "@char%d" % slot, "@ref%d" % slot):
-            text = text.replace(tag, value)
-    return text
+            return match.group(0)
+        if later and slot in seen:
+            value = later.get(slot) or value
+        seen.add(slot)
+        return value
+
+    return CHAR_TAG_RE.sub(swap, text)
 
 
 def sanitize_retention(value, audio=False):
@@ -742,23 +759,33 @@ def assign_speakers(shots, label_for_slot):
     """
     ids = {}
     for shot in shots:
-        rendered = []
-        for event in shot.get("dialogue") or []:
-            tag = "<d>[%s] %s</d>" % (event["language"], event["line"])
-            if event["audio"]:
-                rendered.append("<Audio %d> carries %s" % (event["audio"], tag))
-                continue
-            if event["slot"]:
-                who = label_for_slot(event["slot"]) or "an unnamed speaker"
-                key = ("slot", event["slot"])
-            else:
-                who = event["voice"] or "an unnamed speaker"
-                key = ("voice", who.strip().lower())
-            if key not in ids:
-                ids[key] = len(ids) + 1
-            rendered.append("%s (S%d) %s, %s" % (who, ids[key], event["delivery"], tag))
-        shot["dialogue_text"] = " ".join(rendered)
+        render_speakers(shot, ids, label_for_slot)
     return ids
+
+
+def render_speakers(shot, ids, label_for_slot):
+    """One shot's vocal events, numbering any speaker met here for the first time.
+
+    Split out of assign_speakers so a caller can interleave it with the prose
+    substitution, shot by shot: which mention of a subject is its *first* depends on the
+    prose and the dialogue together, not on either one read to the end on its own.
+    """
+    rendered = []
+    for event in shot.get("dialogue") or []:
+        tag = "<d>[%s] %s</d>" % (event["language"], event["line"])
+        if event["audio"]:
+            rendered.append("<Audio %d> carries %s" % (event["audio"], tag))
+            continue
+        if event["slot"]:
+            who = label_for_slot(event["slot"]) or "an unnamed speaker"
+            key = ("slot", event["slot"])
+        else:
+            who = event["voice"] or "an unnamed speaker"
+            key = ("voice", who.strip().lower())
+        if key not in ids:
+            ids[key] = len(ids) + 1
+        rendered.append("%s (S%d) %s, %s" % (who, ids[key], event["delivery"], tag))
+    shot["dialogue_text"] = " ".join(rendered)
 
 
 ANALYSIS_DESC_PREFIX = "description:"
@@ -920,6 +947,10 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         subject_slots.append({
             "images": images_list,
             "description": info.get("description", "") or "",
+            # what to call the subject after its first appearance, when there is no
+            # <Subject N> label to name it with. Empty repeats the description, which is
+            # what every timeline written before this field did.
+            "short_name": (info.get("shortName", "") or "").strip(),
             "kind": sanitize_kind(info.get("kind")),
             "retention": sanitize_retention(info.get("retention")),
             "note": info.get("retentionNote", "") or "",
@@ -971,6 +1002,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
 
     # --- reference ordinals, in the order the tokenizer will present them ---
     char_tag_values = {}
+    char_tag_later = {}      # what a tag resolves to after its first appearance
     ref_notes = []
     ref_image_slots = []     # {"source": "char"/"input"/"timeline", ...} in <Picture i> order
 
@@ -1042,9 +1074,15 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 slot["keyframe"] = ev["role"]
             ref_image_slots.append(slot)
     else:
+        # The base guide has no subject_definitions section: with references off, a subject
+        # exists only as prose inside integrated_multimodal_description, established "when
+        # a speaker first appears" and referred to consistently after that. So the slot's
+        # description *is* the definition, dropped in where the tag sits.
         for slot_idx, slot in enumerate(subject_slots):
             if slot["description"]:
                 char_tag_values[slot_idx + 1] = slot["description"]
+                if slot["short_name"]:
+                    char_tag_later[slot_idx + 1] = slot["short_name"]
 
     # --- reference video / audio tracks ---
     ref_video_segs, ref_audio_segs = [], []
@@ -1065,6 +1103,17 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # The per-type caps are not the whole story: H3 also takes at most 12 reference files
     # across all types. Trim from the back so the earlier, more deliberate references win.
     ref_warnings = []
+
+    # The panel keeps its images either way, so switching the toolbar back does not cost
+    # the work — but on this path they are never sent, and a slot that looks filled and
+    # does nothing is worth one line.
+    if not ref_mode_on:
+        unsent = sum(1 for s in subject_slots if s["images"])
+        if unsent:
+            ref_warnings.append(
+                "%d subject slot(s) hold reference images; fl2va sends none of them. Only "
+                "the written description reaches the prompt." % unsent)
+
     total_files = len(ref_image_slots) + len(ref_video_segs) + len(ref_audio_segs)
     if total_files > MAX_REF_FILES:
         excess = total_files - MAX_REF_FILES
@@ -1119,28 +1168,50 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         # A slot whose pictures were all trimmed away must not keep pointing at an ordinal
         # that no longer exists; it falls back to its description, exactly as it would
         # with references off.
-        char_tag_values = {}
+        char_tag_values, char_tag_later = {}, {}
         for slot_index, slot in enumerate(subject_slots):
             ordinals = [i + 1 for i, s in enumerate(ref_image_slots)
                         if s.get("source") == "char" and s.get("slot") == slot_index]
             if ordinals:
                 char_tag_values[slot_index + 1] = "<Picture %d>" % ordinals[0]
             elif slot["description"]:
+                # no picture, so no label — this slot is prose here too, and takes the
+                # base guide's first-in-full-then-a-handle treatment with it
                 char_tag_values[slot_index + 1] = slot["description"]
+                if slot["short_name"]:
+                    char_tag_later[slot_index + 1] = slot["short_name"]
 
         if prompt_format == FORMAT_MINIMAX:
             # a named subject beats a bare picture label: it survives across cuts
             for slot, subject in subject_of_slot.items():
                 char_tag_values[slot] = "<Subject %d>" % subject
 
-    global_prompt = substitute_char_tags(global_prompt, char_tag_values)
-    for shot in shots:
-        shot["prompt"] = substitute_char_tags(shot["prompt"], char_tag_values)
+    # Left to right through the finished video — the global block, then each shot in turn,
+    # its prose before its dialogue. `seen_slots` is what makes "the first appearance"
+    # mean the first one anywhere rather than the first one in this particular string:
+    # a subject that speaks in shot 1 and is described in shot 2 is introduced by its
+    # spoken line, not re-introduced afterwards.
+    #
+    # Speakers are numbered in the same pass, which also has to happen after the tags
+    # resolve to their labels and before the shot text is read back for
+    # `(appears in [Shot N])` — a subject that only ever speaks still appears in the
+    # shots where it speaks.
+    seen_slots = set()
+    global_prompt = substitute_char_tags(global_prompt, char_tag_values, char_tag_later,
+                                         seen_slots)
 
-    # Rendered here, after the tags resolve to their labels and before the shot text is
-    # read back for `(appears in [Shot N])` — a subject that only ever speaks still
-    # appears in the shots where it speaks.
-    speaker_ids = assign_speakers(shots, lambda slot: char_tag_values.get(slot))
+    def label_for_slot(slot):
+        value = char_tag_values.get(slot)
+        if slot in seen_slots:
+            value = char_tag_later.get(slot) or value
+        seen_slots.add(slot)
+        return value
+
+    speaker_ids = {}
+    for shot in shots:
+        shot["prompt"] = substitute_char_tags(shot["prompt"], char_tag_values,
+                                              char_tag_later, seen_slots)
+        render_speakers(shot, speaker_ids, label_for_slot)
 
     # only the minimax format has a detailed_description to measure; the key exists either
     # way so every caller can read it without checking the format first

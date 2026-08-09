@@ -224,6 +224,103 @@ tags = compile(tl([img(0, 144, "a.png", prompt="@ref9 and @char1 meet")],
 check_in("@ref9 reaches the ninth slot", "<Subject 9> and <Subject 1> meet", tags["prompt"])
 check_not_in("no raw @ref tag survives", "@ref", tags["prompt"])
 
+check_in("a slot number that does not exist is left alone",
+         "@ref11", compile(tl([img(0, 144, "a.png", prompt="@ref11 waits")],
+                              ref_mode="ON", characters=chars))["prompt"])
+
+# ------------------------------------------------- subjects with references off
+# references/base-en.txt has no subject_definitions section at all: with refs off a
+# subject exists only as prose inside integrated_multimodal_description, established
+# "when a speaker first appears" and referred to consistently after that. So the slot's
+# description is written out in full at the first mention and abbreviated afterwards —
+# otherwise "a middle-aged baker" walks into every shot as a different baker.
+BAKER = "a middle-aged baker with a calm, slightly raspy voice"
+
+
+def base_tl(shots, short_name="the baker", **extra):
+    d = {"reference_mode": "OFF", "prompt_format": "minimax",
+         "global_prompt": "Live-action, cinematic, a small street bakery before sunrise.",
+         "subjects": [{"description": BAKER, "shortName": short_name}],
+         "segments": [{"type": "text", "start": i * 120, "length": 120, "prompt": t}
+                      for i, t in enumerate(shots)]}
+    d.update(extra)
+    return d
+
+
+handled = compile(base_tl(["@ref1 places a fresh loaf on the counter.\n"
+                           "@ref1 says: First batch of the morning.",
+                           "the camera cuts to a close-up as @ref1 wipes the counter."]),
+                  duration_f=240)["prompt"]
+check_in("the first mention is written out in full", "[Shot 1] %s places" % BAKER, handled)
+check_in("a later mention in the same shot uses the handle",
+         "the baker (S1) says, <d>[English] First batch of the morning.</d>", handled)
+check_in("a later shot uses the handle too", "as the baker wipes the counter", handled)
+check("the description is written exactly once", handled.count(BAKER), 1)
+
+# An empty handle is what every timeline written before the field carried, so it has to
+# keep meaning what it meant then: repeat the description at every mention.
+repeated = compile(base_tl(["@ref1 places a fresh loaf on the counter.",
+                            "@ref1 wipes the counter."], short_name=""),
+                   duration_f=240)["prompt"]
+check("no handle repeats the description", repeated.count(BAKER), 2)
+
+# "First" is a property of the finished video, not of whichever string is being scanned:
+# a subject whose first appearance is a spoken line is introduced by that line.
+speaks_first = compile(base_tl(["@ref1 says: First batch of the morning.",
+                                "@ref1 wipes the counter."]), duration_f=240)["prompt"]
+check_in("a subject introduced by its own dialogue is named in full there",
+         "%s (S1) says," % BAKER, speaks_first)
+check_in("and abbreviated in the prose that follows", "the baker wipes", speaks_first)
+
+# Same rule with references on, for a slot with no picture behind it: there is no
+# <Subject N> label to lean on there either, so the prose has to carry the identity.
+noref = compile({"reference_mode": "ON", "prompt_format": "minimax", "global_prompt": "",
+                 "subjects": [{"description": BAKER, "shortName": "the baker"}],
+                 "segments": [{"type": "text", "start": 0, "length": 120,
+                               "prompt": "@ref1 opens the shutters."},
+                              {"type": "text", "start": 120, "length": 120,
+                               "prompt": "@ref1 slices the loaf."}]},
+                duration_f=240)["prompt"]
+check("an unpictured subject is still established once", noref.count(BAKER), 1)
+check_in("and abbreviated after that", "the baker slices the loaf", noref)
+
+# A slot that *does* have a picture already has a stable handle — <Subject 1> — so the
+# field is ignored rather than competing with it.
+pictured = compile(tl([img(0, 144, "a.png", prompt="@ref1 opens the shutters"),
+                       img(144, 144, "b.png", prompt="@ref1 slices the loaf")],
+                      ref_mode="ON",
+                      subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                 "description": BAKER, "shortName": "the baker"}]))["prompt"]
+check_in("a pictured subject keeps its label at the first mention",
+         "<Subject 1> opens the shutters", pictured)
+check_in("and at every mention after it", "<Subject 1> slices the loaf", pictured)
+check_not_in("the handle does not leak into the ref2va path", "the baker", pictured)
+
+check_in("subject images are called out as unsent on the fl2va path",
+         "fl2va sends none of them",
+         " ".join(compile(tl([img(0, 144)], characters=chars))["ref_warnings"]))
+
+# The whole base-guide prompt: no subject_definitions, no retention_analysis, the section
+# name the base guide uses rather than the reference guide's, and the identity carried by
+# the prose alone.
+BASE_GOLDEN = (
+    "integrated_multimodal_description: Live-action, cinematic, a small street bakery "
+    "before sunrise. "
+    "[Shot 1] %s places a fresh loaf on the counter. "
+    "the baker (S1) says, <d>[English] First batch of the morning.</d> "
+    "[Shot 2] At 00:05.000, the camera cuts to a close-up as the baker wipes the counter."
+    "\n\n"
+    "overall_soundscape: Wooden shutters scrape open over a quiet street."
+    "\n\n"
+    "non_diegetic_music: N/A" % BAKER)
+check("the whole refs-off prompt matches the base guide",
+      compile(base_tl(["@ref1 places a fresh loaf on the counter.\n"
+                       "@ref1 says: First batch of the morning.",
+                       "the camera cuts to a close-up as @ref1 wipes the counter."],
+                      overall_soundscape="Wooden shutters scrape open over a quiet street.",
+                      non_diegetic_music="N/A"),
+              duration_f=240)["prompt"], BASE_GOLDEN)
+
 # ------------------------------------------------- full-reference: the whole prompt
 # The one check that pins the *entire* output against references/ref-en.txt: section set
 # and order (subject_definitions, summary, retention_analysis, detailed_description, then

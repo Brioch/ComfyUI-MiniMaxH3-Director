@@ -328,6 +328,42 @@ expressions, or poses" — so each slot carries a **kind** telling the prompt wh
 Slots start at three and a new empty one appears as you fill them, up to the nine-image
 cap.
 
+**A subject does not need an image.** On the **Refs OFF (fl2va)** path H3 is sent no
+reference images at all, so `references/base-en.txt` has no `subject_definitions` section
+to declare one in — a subject there is prose, "established when a speaker first appears"
+inside `integrated_multimodal_description` and referred to consistently after that. That
+is exactly what a slot with a description and no image does: `@ref1` drops the description
+in where the tag sits.
+
+Which is why the slot has a second box on that path:
+
+| Box | Becomes |
+|---|---|
+| **describes** | the full identity, written where the subject first appears |
+| **called** | what to call it at every mention after that |
+
+```
+@ref1 places a fresh loaf on the counter.
+@ref1 says: First batch of the morning.
+```
+```
+[Shot 1] a middle-aged baker with a calm, slightly raspy voice places a fresh loaf on the
+counter. the baker (S1) says, <d>[English] First batch of the morning.</d>
+```
+
+First means first in the finished video, across the global block and every shot in order,
+prose before dialogue — so a subject introduced by its own spoken line is named in full
+there and abbreviated afterwards. Leave **called** empty and the description is repeated
+at every mention, which is what timelines written before this field did.
+
+The same applies with references **on** to a slot that has a description but no image:
+without a picture there is no `<Subject 1>` to name it by, so the prose carries it. A slot
+that does have a picture ignores **called** — `<Subject 1>` is already a stable handle
+that survives every cut.
+
+Images left in a slot on the fl2va path are kept, so switching the toolbar back costs you
+nothing, but they are dimmed and the prompt panel says they are not being sent.
+
 ### How closely a reference is followed
 
 Every reference carries a **retention marker** — the guide's term for "exactly or

@@ -15,6 +15,41 @@ than that, and two of its sections were structurally missing from the output.
   hold a location or a look instead of a face. The panel grows from three slots to nine as
   you fill it, and `@ref1` … `@ref9` address them. `@char1` … `@char3` still resolve.
 
+- **A subject no longer has to have an image**, which is what made subjects unreachable on
+  the **Refs OFF (fl2va)** path: the slot's text boxes only appeared once something had
+  been dropped on it, and fl2va discards the drop. The one thing that path can carry was
+  behind the one thing it throws away.
+
+  [`references/base-en.txt`](https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/references/base-en.txt)
+  has no `subject_definitions` section at all — with no reference files there is nothing to
+  declare — so a subject there lives in the prose, "established when a speaker first
+  appears" and referred to consistently afterwards. The slot now says both halves of that:
+
+  | Box | Becomes |
+  |---|---|
+  | **describes** | the full identity, written where the subject first appears |
+  | **called** | what to call it at every mention after that |
+
+  ```
+  @ref1 places a fresh loaf on the counter.
+  @ref1 says: First batch of the morning.
+
+  → [Shot 1] a middle-aged baker with a calm, slightly raspy voice places a fresh loaf on
+    the counter. the baker (S1) says, <d>[English] First batch of the morning.</d>
+  ```
+
+  Tags now resolve left to right through the finished video — the global block, then each
+  shot in turn, its prose before its dialogue — so "first" means first on screen and not
+  first in whichever box is being scanned. A subject introduced by its own spoken line is
+  named in full there. An empty **called** repeats the description at every mention, which
+  is what every timeline written before this field did. The same treatment applies with
+  references *on* to a slot that has a description but no image: no picture, no
+  `<Subject 1>` to lean on, so the prose has to carry the identity.
+
+  Images left in a slot with references off are kept — switching the toolbar back must not
+  cost the upload — but they are dimmed, and the prompt panel now says outright that
+  fl2va sends none of them.
+
 - **A reference no longer has to be followed exactly.** Every reference carries one of the
   guide's four **retention markers**, written into `retention_analysis` verbatim because
   the guide calls them "fixed English values in the output format":
