@@ -50,6 +50,24 @@ than that, and two of its sections were structurally missing from the output.
   cost the upload — but they are dimmed, and the prompt panel now says outright that
   fl2va sends none of them.
 
+- **The fl2va prompt now stops at the fields the base guide defines.** Its structure is
+  closed — the alignment instruction, then "Three Core Fields (Required, in this order)" —
+  and `summary` is not among them; it belongs to the reference guide. A filled summary box
+  was emitting a section H3 was never trained to read on that path, task-type prefix and
+  all. The box is now hidden with references off and keeps its text for when the toolbar
+  goes back.
+
+  The other half of "required" also applies: `non_diegetic_music` is written as `N/A` when
+  the box is empty, which is the value both guides use for having none.
+  `overall_soundscape` deliberately does **not** get filled in the same way — there `N/A`
+  means the video was asked to be silent, which is a claim only you can make — so an empty
+  one is called out in the prompt panel instead. H3 generates the audio; leaving that field
+  out hands the whole soundtrack to a guess.
+
+  The 350-500 word figure is the reference guide's, for its own `detailed_description`.
+  The base guide gives no word count, so the fl2va path no longer cites one. The word
+  figure is still reported either way.
+
 - **A reference no longer has to be followed exactly.** Every reference carries one of the
   guide's four **retention markers**, written into `retention_analysis` verbatim because
   the guide calls them "fixed English values in the output format":

@@ -533,9 +533,18 @@ presence of video or audio does not automatically create a corresponding task ty
 gear menu's **Task Type** field overrides it, which is how you reach `video editing` and
 `video continuation` — neither of which this node has a path to produce on its own.
 
-The two sound sections and `summary` have their own boxes under the Global Prompt. What you type there
-goes straight into `overall_soundscape` and `non_diegetic_music`. Leave them empty and the
-sections are omitted entirely — an empty heading is worse than none.
+`summary` is the reference guide's section and appears on that path only. The base guide's
+structure is closed — the alignment instruction, then three required core fields — so with
+**Refs OFF** the box is hidden rather than writing a section H3 was never trained to read
+there. Your text is kept for when the toolbar goes back.
+
+The two sound sections have their own boxes under the Global Prompt, on both paths. What
+you type there goes straight into `overall_soundscape` and `non_diegetic_music`. Both
+guides list them as required, so an empty `non_diegetic_music` is written as `N/A` — their
+own value for having none. An empty `overall_soundscape` is **not** filled in the same way:
+there `N/A` says the video was asked to be silent, which is a claim only you can make, so
+the prompt panel points the omission out instead. H3 generates the audio; leaving that
+field out hands the whole soundtrack to a guess.
 
 `Audio:` / `Sound:` / `SFX:` and `Music:` / `Score:` lines written in the prompt text are
 still lifted into the same two sections, so older workflows and the Enhance node keep

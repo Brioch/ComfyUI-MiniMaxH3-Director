@@ -2622,6 +2622,7 @@ class TimelineEditor {
       // and the subject panel swaps `retained` for `called` on the same switch
       this.updateUIFromSelection();
       this.updateCharacterSlotsUI();
+      this._syncSummaryField();
     });
     this.refOptionSelect = refOptionSelect;
 
@@ -3221,6 +3222,11 @@ class TimelineEditor {
     this.summaryInput = makeSoundField(
       "summary", "summary",
       "One paragraph on the target video and what each reference is for. The [task type] prefix is added for you.");
+    // ...and only the reference guide has it. The base guide's structure is closed —
+    // the alignment instruction, then three required core fields — so with refs off the
+    // box would offer a section the prompt cannot carry. The text is kept either way.
+    this.summaryField = this.summaryInput.parentElement;
+    this._syncSummaryField();
 
     this.globalPromptInput.addEventListener("input", (e) => {
       const val = e.target.value;
@@ -4336,6 +4342,8 @@ class TimelineEditor {
     if (this.refOptionSelect) {
       this.refOptionSelect.value = this.timeline.reference_mode || "OFF";
     }
+    // and everything else the switch governs, for a workflow restored on the fl2va path
+    this._syncSummaryField();
 
     this.container.appendChild(this.wrapper);
   }
@@ -9591,6 +9599,13 @@ class TimelineEditor {
 
   // Three always visible, then one empty slot ahead of whatever is filled, so the panel
   // grows only as far as it is used instead of showing nine empty boxes on day one.
+  // Shown only on the ref2va path, where `summary` is a section of the prompt.
+  _syncSummaryField() {
+    if (!this.summaryField) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    this.summaryField.style.display = refsOn ? "" : "none";
+  }
+
   // A slot counts as used once it holds an image *or* a description. With refs off the
   // image is discarded by the render, so a written subject is all a slot can ever be
   // there — gating the panel on images alone capped that path at three empty boxes.

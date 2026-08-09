@@ -321,6 +321,44 @@ check("the whole refs-off prompt matches the base guide",
                       non_diegetic_music="N/A"),
               duration_f=240)["prompt"], BASE_GOLDEN)
 
+# ------------------------------------------------- the base guide's field list is closed
+# "Part Two: Three Core Fields (Required, in this order)" — and `summary` is not one of
+# them. It belongs to the reference guide, so on the fl2va path it would be a section H3
+# was never trained to read there. The box keeps its text for when the toolbar goes back.
+summary_off = compile(base_tl(["she enters"], summary="a woman walks through a market",
+                              task_type_override="video editing"), duration_f=240)
+check_not_in("no summary section on the fl2va path", "summary:", summary_off["prompt"])
+check_not_in("and no task-type prefix either", "video editing", summary_off["prompt"])
+check_in("the same box still reaches the ref2va prompt",
+         "summary: [keyframe completion] a woman walks through a market",
+         compile(tl([img(0, 144)], ref_mode="ON",
+                    summary="a woman walks through a market"))["prompt"])
+
+# non_diegetic_music is required by both guides, and "N/A" is their own value for having
+# none. overall_soundscape is not filled in the same way: there "N/A" claims the video was
+# asked to be silent, which is a statement only the user can make.
+check_in("an empty music box still writes the required field",
+         "non_diegetic_music: N/A", compile(tl([img(0, 144)]))["prompt"])
+check_in("and so does the reference path",
+         "non_diegetic_music: N/A", compile(tl([img(0, 144)], ref_mode="ON"))["prompt"])
+check("a prompt is never manufactured out of the default alone",
+      plan.plan_timeline({"prompt_format": "minimax"}, 0, 288, FPS)["prompt"], "video")
+check_in("an empty soundscape is called out rather than invented",
+         "overall_soundscape is empty",
+         " ".join(compile(tl([img(0, 144)]))["ref_warnings"]))
+check_not_in("and left alone once written", "overall_soundscape is empty",
+             " ".join(compile(tl([img(0, 144)],
+                                 overall_soundscape="Market chatter."))["ref_warnings"]))
+
+# 350-500 words is the reference guide's figure for its own detailed_description. The base
+# guide gives no word count at all, so the fl2va path must not cite one.
+long_shot = " ".join(["she walks"] * 300)
+check_not_in("no word-count warning on the fl2va path", "350-500",
+             " ".join(compile(tl([img(0, 144, prompt=long_shot)]))["ref_warnings"]))
+check_in("the reference path still warns past 500 words", "350-500",
+         " ".join(compile(tl([img(0, 144, prompt=long_shot)],
+                             ref_mode="ON"))["ref_warnings"]))
+
 # ------------------------------------------------- full-reference: the whole prompt
 # The one check that pins the *entire* output against references/ref-en.txt: section set
 # and order (subject_definitions, summary, retention_analysis, detailed_description, then

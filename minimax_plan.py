@@ -642,6 +642,15 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
         parts.append("overall_soundscape: " + soundscape.strip())
     if (music or "").strip():
         parts.append("non_diegetic_music: " + music.strip())
+    elif parts:
+        # Both guides list non_diegetic_music as a required field, and both write "N/A"
+        # in it — the base guide says to do so "when there is no non-diegetic music",
+        # which is exactly what an empty box means. overall_soundscape deliberately does
+        # not get the same treatment: there "N/A" is reserved for a video the user asked
+        # to be silent, so filling it in would state something nobody said.
+        #
+        # `parts` guards against writing a prompt that is nothing but this line.
+        parts.append("non_diegetic_music: N/A")
 
     return "\n\n".join(parts).strip()
 
@@ -1264,11 +1273,18 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             if shot_index is not None and 0 <= shot_index < len(shots):
                 shots[shot_index].setdefault("ref_phrases", []).append(texts["phrase"])
 
-        summary_line = " ".join(x for x in (
-            task_type_prefix(ref_image_slots, ref_video_segs, ref_audio_segs,
-                             tdata.get("task_type_override")) if ref_mode_on else "",
-            (summary or "").strip() or (tdata.get("summary", "") or "").strip(),
-        ) if x)
+        # `summary` is the reference guide's section. The base guide's structure is
+        # explicit and closed — the alignment instruction, then "Three Core Fields
+        # (Required, in this order)" — so on the fl2va path a summary line would be a
+        # section H3 was never trained to read there. The box keeps its text for when the
+        # toolbar goes back.
+        summary_line = ""
+        if ref_mode_on:
+            summary_line = " ".join(x for x in (
+                task_type_prefix(ref_image_slots, ref_video_segs, ref_audio_segs,
+                                 tdata.get("task_type_override")),
+                (summary or "").strip() or (tdata.get("summary", "") or "").strip(),
+            ) if x)
 
         # Only the fl2va path: ref2va has no keyframe slot and its guide asks for no
         # instruction line. `written` mirrors the shot numbering the body will use.
@@ -1294,11 +1310,24 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         description_words = len(global_prompt.split()) + sum(
             len(("%s %s" % (s["prompt"] or "", s.get("dialogue_text") or "")).split())
             for s in shots if shot_has_text(s))
-        if description_words > DESCRIPTION_MAX_WORDS:
+        #
+        # Only on the reference path: 350-500 is that guide's figure for its own
+        # detailed_description. The base guide gives no word count at all, so citing one
+        # there would put words in its mouth. The figure is still reported either way.
+        if ref_mode_on and description_words > DESCRIPTION_MAX_WORDS:
             ref_warnings.append(
                 "detailed_description is about %d words; the guide suggests %d-%d for "
                 "generation tasks."
                 % (description_words, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS))
+
+        # Both guides list the three core fields as required, and this is the one that
+        # cannot be filled in for the user: "N/A" here means the video was asked to be
+        # silent, which is a claim only the user can make. H3 generates the audio, so
+        # leaving it out hands the whole soundtrack to the model's guess.
+        if not (soundscape or "").strip():
+            ref_warnings.append(
+                "overall_soundscape is empty; the guide lists it as a required field. "
+                "Describe the ambience, or write N/A if the video is meant to be silent.")
     else:
         prompt = compile_storyboard(global_prompt, shots, window_seconds)
         if ref_notes:
