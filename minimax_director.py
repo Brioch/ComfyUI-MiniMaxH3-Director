@@ -45,6 +45,11 @@ log = logging.getLogger(__name__)
 
 MODEL_FPS = plan.MODEL_FPS
 DEFAULT_W, DEFAULT_H = 1344, 768
+# Measured, not assumed: 32x32 renders end to end, 16x16 passes PackedLayout and then dies
+# inside the video VAE, and anything under 8 leaves a zero-edged latent that takes core's
+# PackedLayout down first. 32 is also H3's own step, which is why divisible_by defaults to
+# it — with the defaults this floor is unreachable anyway.
+MIN_CANVAS_EDGE = 32
 
 
 # --------------------------------------------------------------------------------------
@@ -434,6 +439,19 @@ class MiniMaxH3Director(io.ComfyNode):
             canvas_src = p["events"][0]["tensor"] if p["events"] else None
         width, height = resolve_canvas(mm, int(custom_width), int(custom_height),
                                        int(divisible_by), resize_method, canvas_src)
+
+        # Core's PackedLayout divides by `math.sqrt(latent_h * latent_w)`, so a zero-edged
+        # latent takes it down with a bare "float division by zero" six frames deep, naming
+        # nothing that would lead back here. A slightly larger canvas clears that and then
+        # fails inside the video VAE instead. Neither is reachable with the default
+        # divisible_by of 32; custom_width=4 with divisible_by=1 is (issue #4).
+        if width < MIN_CANVAS_EDGE or height < MIN_CANVAS_EDGE:
+            raise ValueError(
+                "MiniMax H3 Director: the canvas came out %dx%d. H3 needs at least %dpx per "
+                "side — below that its VAE has nothing left to work with and the failure "
+                "surfaces deep in ComfyUI as a division by zero. Raise custom_width / "
+                "custom_height, or raise divisible_by (32 is H3's own step)."
+                % (width, height, MIN_CANVAS_EDGE))
 
         def fit(tensor):
             out = media.resize_image(tensor, width, height, resize_method, int(divisible_by))
