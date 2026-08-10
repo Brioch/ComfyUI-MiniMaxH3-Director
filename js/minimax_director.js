@@ -13102,6 +13102,21 @@ app.registerExtension({
           if (w && (w.value == null || w.value === "")) w.value = def;
         }
 
+        // A widget added since this workflow was saved takes a row the saved height never
+        // allowed for, and the DOM panels below it will not shrink past their floors — so
+        // the timeline and the prompt preview end up hanging out of the node body. A fresh
+        // node sits exactly on computeSize(), which means every older workflow is short by
+        // whatever the new widget occupies; ref_image_notes is 66px of textarea. Grow to
+        // the minimum, never shrink: anything above it is the user's own sizing.
+        const minHeight = this.computeSize()[1];
+        if (this.size[1] < minHeight) {
+          this.size[1] = minHeight;
+          // the draw loop only re-arranges widgets for nodes carrying this flag; without
+          // it the body redraws taller while the overlays keep their old positions
+          this._widgetSlotsDirty = true;
+          this.setDirtyCanvas?.(true, true);
+        }
+
         setTimeout(() => {
           if (this._timelineEditor) {
             mmxdLog("[MiniMaxDirector debug] setTimeout sync block called.");

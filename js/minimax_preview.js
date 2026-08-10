@@ -106,6 +106,21 @@ app.registerExtension({
           `Falling back to ${JSON.stringify(fallback)}; check the node's settings.`);
         w.value = fallback;
       }
+
+      // A widget added since this workflow was saved pushes the preview panel down by one
+      // row, and the panel has a floor it will not shrink below — so on a node saved at
+      // its old minimum the panel ends up hanging out of the body. Measured: with the
+      // rows this node has now, anything under computeSize() overflows by exactly the
+      // difference. Grow to that minimum, never shrink: the height above it is the
+      // user's choice.
+      const min = this.computeSize()[1];
+      if (this.size[1] < min) {
+        this.size[1] = min;
+        // the draw loop only re-arranges widgets for nodes carrying this flag; without it
+        // the body would redraw at the new height while the overlay keeps the old one
+        this._widgetSlotsDirty = true;
+        this.setDirtyCanvas?.(true, true);
+      }
       return r;
     };
 
