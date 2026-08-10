@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.2.0-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.6-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -45,7 +45,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
-**0.2.0** · 2026-08-09 — full reference mode. A reference is no longer always a character
+**Unreleased** — full reference mode. A reference is no longer always a character
 and no longer always followed exactly: subject slots carry a **kind** (scene, prop, style,
 …) and every reference carries a **retention marker** from `fully_preserved` to
 `weak_reference`, plus a box to write the sentence that follows it in your own words.

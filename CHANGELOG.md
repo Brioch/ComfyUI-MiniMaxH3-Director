@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## Unreleased
 
 Full-reference mode, from
 [`references/ref-en.txt`](https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/references/ref-en.txt).
@@ -121,7 +121,7 @@ than that, and two of its sections were structurally missing from the output.
           retention_analysis: Keep the identity, face and clothing of <Subject 1>
                               consistent across every shot. [Shot 1] begins from <Picture 2>.
 
-  0.2.0   subject_definitions:
+  now     subject_definitions:
           <Subject 1> is a woman in a red coat, shown in <Picture 1>.
           <Picture 2> is the first frame of [Shot 1].
 
