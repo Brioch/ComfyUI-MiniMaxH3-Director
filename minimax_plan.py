@@ -147,10 +147,37 @@ def build_subject_definitions(char_slots, ref_image_slots, ref_video_segs, ref_a
     for i, _seg in enumerate(ref_video_segs):
         lines.append("<Video %d> is a reference video: follow its motion and camera work."
                      % (i + 1))
-    for i, _seg in enumerate(ref_audio_segs):
-        lines.append("<Audio %d> is a reference audio clip: follow its voice and timbre."
-                     % (i + 1))
-    return lines, subject_of_slot
+
+    # An audio clip can name the subject whose voice it carries. The reference guide gives
+    # the sentence for it — "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)."
+    # — and without it a second voice reference is just another <Audio N> with no way to
+    # say who is speaking, which is exactly what issue #10 ran into.
+    bound_audio = {}
+    for i, seg in enumerate(ref_audio_segs):
+        subject = subject_of_slot.get(_audio_subject_slot(seg))
+        if subject:
+            bound_audio[i + 1] = subject
+            lines.append("<Audio %d> is the voice-timbre reference for <Subject %d> (S%d)."
+                         % (i + 1, subject, subject))
+        else:
+            lines.append("<Audio %d> is a reference audio clip: follow its voice and timbre."
+                         % (i + 1))
+    return lines, subject_of_slot, bound_audio
+
+
+def _audio_subject_slot(seg):
+    """Which character slot an audio clip belongs to, 1-based, or None.
+
+    Stored on the segment by the editor. Accepts the string a <select> hands over.
+    """
+    raw = (seg or {}).get("subject")
+    if raw in (None, "", "none"):
+        return None
+    try:
+        slot = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return slot if slot > 0 else None
 
 
 def alignment_instruction(has_first, has_last, shot_count, seconds):
@@ -568,9 +595,9 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     actual_seconds = length / MODEL_FPS
 
     # --- prompt ---
-    subject_lines, subject_of_slot = [], {}
+    subject_lines, subject_of_slot, bound_audio = [], {}, {}
     if ref_mode_on and prompt_format == FORMAT_MINIMAX:
-        subject_lines, subject_of_slot = build_subject_definitions(
+        subject_lines, subject_of_slot, bound_audio = build_subject_definitions(
             char_slots, ref_image_slots, ref_video_segs, ref_audio_segs)
         # a named subject beats a bare picture label: it survives across cuts
         for slot, subject in subject_of_slot.items():
@@ -607,10 +634,18 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 retention_lines.append(
                     "Follow the camera work and motion of %s."
                     % ", ".join("<Video %d>" % (i + 1) for i in range(len(ref_video_segs))))
-            if ref_audio_segs:
+            # A clip already tied to a subject said whose voice it is in its own
+            # definition; repeating it here as an anonymous one would only blur that.
+            for ordinal, subject in sorted(bound_audio.items()):
+                retention_lines.append(
+                    "<Subject %d> speaks with the voice from <Audio %d>."
+                    % (subject, ordinal))
+            loose = [i + 1 for i in range(len(ref_audio_segs))
+                     if (i + 1) not in bound_audio]
+            if loose:
                 retention_lines.append(
                     "Keep the voice and timbre of %s."
-                    % ", ".join("<Audio %d>" % (i + 1) for i in range(len(ref_audio_segs))))
+                    % ", ".join("<Audio %d>" % o for o in loose))
         if ref_notes:
             retention_lines.extend(n + "." for n in ref_notes)
         # Only the fl2va path: ref2va has no keyframe slot and its guide asks for no

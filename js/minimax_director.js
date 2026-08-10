@@ -243,6 +243,9 @@ const STYLES = `
     display: none;
   }
   .mmxd-audio-info span { color: #fff; font-weight: 500; }
+  .mmxd-audio-subject-label { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: #aaa; }
+  .mmxd-audio-subject { background: #2a2a2a; color: #e6e6e6; border: 1px solid #444; border-radius: 4px; height: 22px; padding: 0 4px; font-size: 11px; font-family: inherit; cursor: pointer; outline: none; max-width: 260px; }
+  .mmxd-audio-subject:hover { background: #343434; border-color: #666; }
   .mmxd-controls-group {
     background: #1e1e1e;
     border: 1px solid #333;
@@ -5783,11 +5786,37 @@ class TimelineEditor {
       this.vidAttnValue.style.display = "none";
       this.audioInfoArea.style.display = "block";
       this.motionInfoArea.style.display = "none";
+      // Whose voice this is. The reference guide has a sentence for exactly this —
+      // "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." — and without
+      // somewhere to say it, a second voice reference is just another numbered clip with
+      // no way to tell the model who is speaking (issue #10).
+      const chars = this.timeline.characters || [];
+      const options = ['<option value="">— not a specific subject —</option>'].concat(
+        chars.map((c, i) => {
+          const desc = (c.description || "").trim();
+          const label = desc ? `Subject ${i + 1} — ${desc.slice(0, 40)}` : `Subject ${i + 1}`;
+          const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
+          return `<option value="${i + 1}"${sel}>${label}</option>`;
+        })).join("");
       this.audioInfoArea.innerHTML = `
         File: <span>${seg.fileName || "Unknown"}</span><br>
         Length: <span>${this.formatTime(seg.audioDurationFrames)}</span> Output Length: <span>${this.formatTime(seg.length)}</span><br>
-        Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span>
+        Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span><br>
+        <label class="mmxd-audio-subject-label">Voice of:
+          <select class="mmxd-audio-subject">${options}</select>
+        </label>
       `;
+      const subjSel = this.audioInfoArea.querySelector(".mmxd-audio-subject");
+      if (subjSel) {
+        subjSel.addEventListener("change", (e) => {
+          const target = this.timeline.audioSegments?.[this.selectedIndex];
+          if (!target) return;
+          if (e.target.value) target.subject = parseInt(e.target.value, 10);
+          else delete target.subject;
+          this.commitChanges(true);
+          if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+        });
+      }
       this.strengthValue.value = "1.00";
       this.strengthValue.disabled = true;
     } else if (this.selectionType === "motion" && seg) {

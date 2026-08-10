@@ -313,6 +313,58 @@ check("split_audio_music leaves a prompt without labels alone",
 check("split_audio_music takes a label only at the start of a line",
       plan.split_audio_music("a car with no audio: here")[1], "")
 
+# ------------------------------------------- issue #10: whose voice is <Audio N>?
+two_chars = [{"images": [{"b64": "x", "name": "c1.png"}], "description": "a woman"},
+             {"images": [{"b64": "x", "name": "c2.png"}], "description": "a man"}]
+
+
+def audio(subject=None):
+    seg = {"audioFile": "voice.wav", "fileName": "voice.wav", "start": 0, "length": 288}
+    if subject is not None:
+        seg["subject"] = subject
+    return seg
+
+
+loose_audio = compile(tl([img(0, 288, "a.png", prompt="they talk")], ref_mode="ON",
+                         characters=two_chars, audioSegments=[audio()]),
+                      use_custom_audio=True)
+check_in("an unassigned clip keeps the general wording",
+         "<Audio 1> is a reference audio clip: follow its voice and timbre.",
+         loose_audio["prompt"])
+check_in("and is kept in the general retention line",
+         "Keep the voice and timbre of <Audio 1>.", loose_audio["prompt"])
+
+bound = compile(tl([img(0, 288, "a.png", prompt="they talk")], ref_mode="ON",
+                   characters=two_chars,
+                   audioSegments=[audio(subject=2)]),
+                use_custom_audio=True)
+check_in("a clip tied to a subject uses the guide's own sentence",
+         "<Audio 1> is the voice-timbre reference for <Subject 2> (S2).", bound["prompt"])
+check_in("and says so once more where it matters",
+         "<Subject 2> speaks with the voice from <Audio 1>.", bound["prompt"])
+check_not_in("a bound clip is not repeated as an anonymous one",
+             "Keep the voice and timbre of", bound["prompt"])
+
+mixed_audio = compile(tl([img(0, 288, "a.png", prompt="they talk")], ref_mode="ON",
+                         characters=two_chars,
+                         audioSegments=[audio(subject=1), audio()]),
+                      use_custom_audio=True)
+check_in("one bound clip names its subject",
+         "<Audio 1> is the voice-timbre reference for <Subject 1> (S1).",
+         mixed_audio["prompt"])
+check_in("the other stays general", "Keep the voice and timbre of <Audio 2>.",
+         mixed_audio["prompt"])
+check("a subject of 0 or nonsense is treated as unassigned",
+      (plan._audio_subject_slot({"subject": 0}), plan._audio_subject_slot({"subject": ""}),
+       plan._audio_subject_slot({"subject": "none"}), plan._audio_subject_slot({}),
+       plan._audio_subject_slot({"subject": "2"})),
+      (None, None, None, None, 2))
+check("a clip pointing at a slot with no images binds nothing",
+      "voice-timbre reference" in
+      compile(tl([img(0, 288, "a.png", prompt="x")], ref_mode="ON",
+                 characters=two_chars, audioSegments=[audio(subject=3)]),
+              use_custom_audio=True)["prompt"], False)
+
 # ---------------------------------------------------------------- comfyui format
 cf = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON",
                 prompt_format="comfyui"))
