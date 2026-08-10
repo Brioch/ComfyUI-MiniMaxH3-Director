@@ -323,7 +323,8 @@ def classify_events(events, duration_frames, fps):
 
 def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                   use_custom_motion=True, use_custom_audio=False, override_audio=False,
-                  extra_ref_image_count=0, soundscape="", music="", prompt_format=None):
+                  extra_ref_image_count=0, soundscape="", music="", prompt_format=None,
+                  ref_image_notes=""):
     """Work out shots, keyframe roles, reference ordinals and the final prompt.
 
     Returns a dict; `execute` uses it to decide what media to load, the endpoint just
@@ -418,9 +419,20 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 ref_image_slots.append({"source": "char", "slot": slot_idx, "image": img})
                 ref_image_slots[-1]["slot"] = slot_idx
 
-        for _ in range(max(0, int(extra_ref_image_count))):
+        # Images arriving through the `ref_images` input used to be numbered and never
+        # described — they took a <Picture N> and the prompt said nothing about what was
+        # in them, which is the one thing the model needed. One line of `ref_image_notes`
+        # per image fills that in, in the guide's own sentence shape
+        # ("<Picture 3> is a storyboard reference for [Shot 1] …"). Blank lines are kept as
+        # placeholders so line 3 always describes the third image (issue #8).
+        notes = [n.strip() for n in (ref_image_notes or "").splitlines()]
+        for index in range(max(0, int(extra_ref_image_count))):
             if len(ref_image_slots) >= MAX_REF_IMAGES:
                 break
+            ordinal = len(ref_image_slots) + 1
+            text = notes[index] if index < len(notes) else ""
+            if text:
+                ref_notes.append("<Picture %d> is %s" % (ordinal, text.rstrip(".")))
             ref_image_slots.append({"source": "input"})
 
         # Timeline images in the order they appear on the timeline. `events` is already

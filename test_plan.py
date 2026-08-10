@@ -199,6 +199,27 @@ check("ref_images input slots sit between character and timeline",
                                     extra_ref_image_count=2)["ref_image_slots"]],
       ["char", "input", "input", "timeline"])
 
+# issue #8: those input images used to be numbered and never described
+described = compile(tl([img(0, 144, "a.png", prompt="she enters")], ref_mode="ON"),
+                    extra_ref_image_count=3,
+                    ref_image_notes="the kitchen set\n\na storyboard reference for the opening")
+check_in("a note describes the input image it belongs to",
+         "<Picture 1> is the kitchen set.", described["prompt"])
+check_in("a blank line is a placeholder, so line 3 stays with image 3",
+         "<Picture 3> is a storyboard reference for the opening.", described["prompt"])
+check_not_in("the skipped image gets no invented note", "<Picture 2> is", described["prompt"])
+check("described or not, every input image still takes a slot",
+      len(described["ref_image_slots"]), 4)
+check_not_in("no notes at all means no extra lines",
+             "<Picture 1> is the", compile(tl([img(0, 144, "a.png", prompt="x")],
+                                              ref_mode="ON"),
+                                           extra_ref_image_count=2)["prompt"])
+check_in("a trailing full stop in the note is not doubled",
+         "<Picture 1> is the kitchen set.",
+         compile(tl([img(0, 144, "a.png", prompt="x")], ref_mode="ON"),
+                 extra_ref_image_count=1,
+                 ref_image_notes="the kitchen set.")["prompt"])
+
 many = compile(tl([img(i * 20, 20, "%d.png" % i) for i in range(14)], ref_mode="ON"))
 check("reference images are capped at the model card's limit",
       len(many["ref_image_slots"]), plan.MAX_REF_IMAGES)

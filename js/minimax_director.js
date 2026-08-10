@@ -12921,6 +12921,9 @@ app.registerExtension({
         const w = (name) => self.widgets?.find(x => x.name === name);
         const refreshPrompt = async () => {
           try {
+            const refNotes = w("ref_image_notes")?.value || "";
+            const refTrimmed = refNotes.replace(/\s+$/, "");
+            const refNoteCount = refTrimmed ? refTrimmed.split("\n").length : 0;
             const body = {
               timeline_data: w("timeline_data")?.value || "",
               start_frame: w("start_frame")?.value || 0,
@@ -12930,6 +12933,14 @@ app.registerExtension({
               use_custom_audio: !!w("use_custom_audio")?.value,
               override_audio: !!w("override_audio")?.value,
               global_prompt: self.properties?.global_prompt || "",
+              // a widget, so the panel must ship it or it would show pictures the node
+              // describes and the preview does not
+              ref_image_notes: refNotes,
+              // How many images are on the ref_images wire is not knowable here — it is a
+              // tensor that only exists once the graph runs. The described ones are, so
+              // the panel previews those. Wire more than you describe and the node will
+              // number more than the panel shows; describe them and the two agree.
+              extra_ref_image_count: refNoteCount,
             };
             const resp = await api.fetchApi("/minimax_director/compile_prompt", {
               method: "POST", body: JSON.stringify(body),

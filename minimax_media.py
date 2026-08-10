@@ -221,6 +221,7 @@ async def compile_prompt_endpoint(request):
             use_custom_audio=bool(data.get("use_custom_audio", False)),
             override_audio=bool(data.get("override_audio", False)),
             extra_ref_image_count=int(data.get("extra_ref_image_count") or 0),
+            ref_image_notes=data.get("ref_image_notes") or "",
         )
 
         warnings = []

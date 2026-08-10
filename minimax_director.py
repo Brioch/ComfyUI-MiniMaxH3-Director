@@ -308,6 +308,12 @@ class MiniMaxH3Director(io.ComfyNode):
                 io.Image.Input("ref_images", optional=True,
                                tooltip="Extra <Picture i> references (single image or batch), appended after the "
                                        "character slots. ref2va only."),
+                io.String.Input("ref_image_notes", multiline=True, default="", optional=True,
+                                tooltip="One line per image on 'ref_images', describing what it "
+                                        "is: 'the kitchen set', 'a storyboard reference for the "
+                                        "opening'. Without a line the picture is still numbered "
+                                        "but the prompt says nothing about it. Blank lines count, "
+                                        "so line 3 always belongs to the third image."),
                 io.Float.Input("start", force_input=True, optional=True, default=0.0,
                                tooltip="Automation (connection-only). Window start in SECONDS."),
                 io.Float.Input("end", force_input=True, optional=True, default=0.0,
@@ -369,7 +375,7 @@ class MiniMaxH3Director(io.ComfyNode):
                 divisible_by=32, img_compression=0, audio_vae=None,
                 use_custom_audio=False, inpaint_audio=True, use_custom_motion=True,
                 override_audio=False, ref_image_size="match",
-                shift_video=12.0, shift_audio=3.0, ref_images=None,
+                shift_video=12.0, shift_audio=3.0, ref_images=None, ref_image_notes="",
                 start=None, end=None, duration=None) -> io.NodeOutput:
 
         mm = core()
@@ -391,7 +397,8 @@ class MiniMaxH3Director(io.ComfyNode):
                                use_custom_motion=use_custom_motion,
                                use_custom_audio=use_custom_audio,
                                override_audio=override_audio,
-                               extra_ref_image_count=extra_refs)
+                               extra_ref_image_count=extra_refs,
+                               ref_image_notes=ref_image_notes)
 
         length = p["length"]
         if length > plan.TRAINED_MAX_FRAMES:
