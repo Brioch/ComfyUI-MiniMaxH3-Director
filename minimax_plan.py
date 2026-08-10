@@ -443,9 +443,19 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         # text. An image whose own segment has no prompt gets the guide's shot-free
         # phrasing rather than a number the reader cannot find.
         #
-        # The role also lives on the slot, where it is not about wording at all: it picks
-        # which frame of a *video* segment becomes the reference (the last one for
-        # ROLE_LAST) and whether it is fitted to the canvas. See minimax_director.py.
+        # Which of the three sentences applies is decided by where the image sits in *its
+        # own shot*, not by the fl2va anchor roles. One timeline segment is one shot and
+        # the image opens it, so a picture is what its shot begins from — even the last
+        # one on the timeline, which starts the final shot rather than ending it. 0.1.5
+        # read `last` off the fl2va classifier and announced a hard cut's opening image as
+        # what the shot "ends on" (issue #4). "Ends on" is now reserved for the segment
+        # the user explicitly flagged as an end frame, which is the only place the
+        # intention is actually stated.
+        #
+        # The role still lives on the slot, where it is not about wording at all: it picks
+        # which frame of a *video* segment becomes the reference and whether it is fitted
+        # to the canvas. It follows the same rule, so the picture the prompt describes is
+        # the frame that gets encoded. See minimax_director.py.
         written_shot_no = {}
         counted = 0
         for shot_i, shot in enumerate(shots):
@@ -458,23 +468,20 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 break
             ordinal = len(ref_image_slots) + 1
             slot = {"source": "timeline", "event": ev}
-            if ev["role"] in (ROLE_FIRST, ROLE_LAST):
-                slot["keyframe"] = ev["role"]
             shot_no = written_shot_no.get(ev.get("shot_index"))
             at = fmt_seconds(ev["rel_start_f"] / fps)
-            if ev["role"] == ROLE_FIRST:
-                ref_notes.append("[Shot %d] begins from <Picture %d>" % (shot_no, ordinal)
-                                 if shot_no else
-                                 "The video begins from <Picture %d>" % ordinal)
-            elif ev["role"] == ROLE_LAST:
+            if ev["is_end"]:
+                slot["keyframe"] = ROLE_LAST
                 ref_notes.append("[Shot %d] ends on <Picture %d>" % (shot_no, ordinal)
                                  if shot_no else
                                  "The video ends on <Picture %d>" % ordinal)
+            elif shot_no:
+                slot["keyframe"] = ROLE_FIRST
+                ref_notes.append("[Shot %d] begins from <Picture %d>" % (shot_no, ordinal))
             else:
-                ref_notes.append(
-                    "The keyframe of [Shot %d] corresponds to <Picture %d>, at %s"
-                    % (shot_no, ordinal, at) if shot_no else
-                    "<Picture %d> is a composition anchor at %s" % (ordinal, at))
+                # no text on its own segment, so there is no [Shot N] to point at
+                ref_notes.append("<Picture %d> is a composition anchor at %s"
+                                 % (ordinal, at))
             ref_image_slots.append(slot)
     else:
         for slot_idx, slot in enumerate(char_slots):
@@ -575,9 +582,12 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         if subject_lines:
             named = ", ".join("<Subject %d>" % s for s in sorted(subject_of_slot.values()))
             if named:
+                # "appearance" rather than "clothing": a subject slot holds whatever the
+                # user put in it — a person, an animal, a car, a building — and only one of
+                # those wears anything (issue #4).
                 retention_lines.append(
-                    "Keep the identity, face and clothing of %s consistent across every shot."
-                    % named)
+                    "Keep the identity, face and appearance of %s consistent across every "
+                    "shot." % named)
             if ref_video_segs:
                 retention_lines.append(
                     "Follow the camera work and motion of %s."

@@ -109,43 +109,52 @@ flush = compile(tl([img(0, 144, "a.png", prompt="she enters"),
                     img(144, 144, "b.png", prompt="she arrives")], ref_mode="ON"))
 short = compile(tl([img(0, 144, "a.png", prompt="she enters"),
                     img(144, 141, "b.png", prompt="she arrives")], ref_mode="ON"))
+noshot_slots = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")], ref_mode="ON"))
 
 check_not_in("ref2va never says 'opening frame'", "opening frame", flush["prompt"])
 check_not_in("ref2va never says 'closing frame'", "closing frame", flush["prompt"])
-check_in("the opening image uses the guide's phrasing",
+check_in("the first image opens its shot",
          "[Shot 1] begins from <Picture 1>.", flush["prompt"])
-check_in("the closing image uses the guide's phrasing",
-         "[Shot 2] ends on <Picture 2>.", flush["prompt"])
-check_in("a middle image is a keyframe, with its time",
-         "The keyframe of [Shot 2] corresponds to <Picture 2>, at 6s.", short["prompt"])
-check("the phrasing no longer flips on where a segment ends",
-      ("begins from <Picture 1>" in flush["prompt"]
-       and "begins from <Picture 1>" in short["prompt"]), True)
+# The reported case: a hard cut. The second image starts shot 2 at 6s; it does not end it.
+check_in("the second image opens ITS shot rather than ending the video",
+         "[Shot 2] begins from <Picture 2>.", flush["prompt"])
+check_not_in("nothing 'ends on' unless the user said so", "ends on", flush["prompt"])
+check("the phrasing no longer depends on where a segment stops",
+      flush["prompt"], short["prompt"])
 check_not_in("picture notes carry no filenames — the guide has no such notion",
              "a.png", flush["prompt"])
 
+# "ends on" is reserved for a segment explicitly flagged as the end frame
+ends = compile(tl([img(0, 144, "a.png", prompt="she enters"),
+                   img(144, 144, "b.png", prompt="she arrives", end_frame=True)],
+                  ref_mode="ON"))
+check_in("an explicit end frame does say 'ends on'",
+         "[Shot 2] ends on <Picture 2>.", ends["prompt"])
+check("and it is the slot that takes the segment's last frame",
+      [s.get("keyframe") for s in ends["ref_image_slots"]],
+      [plan.ROLE_FIRST, plan.ROLE_LAST])
+check("without the flag every timeline picture is a shot opener",
+      [s.get("keyframe") for s in flush["ref_image_slots"]],
+      [plan.ROLE_FIRST, plan.ROLE_FIRST])
+
 # an image whose own segment carries no text has no shot number in the body to point at
 noshot = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")], ref_mode="ON"))
-check_in("without a numbered shot the opening image still reads naturally",
-         "The video begins from <Picture 1>.", noshot["prompt"])
-check_in("without a numbered shot the closing image still reads naturally",
-         "The video ends on <Picture 2>.", noshot["prompt"])
+check_in("an untexted image is a composition anchor, with its time",
+         "<Picture 1> is a composition anchor at 0s.", noshot["prompt"])
 check_not_in("no shot number is invented when the body has none",
              "[Shot", noshot["prompt"])
 mixed = compile(tl([img(0, 96, "a.png", prompt="she enters"),
                     img(96, 96, "b.png"),
                     img(192, 96, "c.png", prompt="she leaves")], ref_mode="ON"))
 check_in("shot numbers follow the body, which counts only shots with text",
-         "[Shot 2] ends on <Picture 3>.", mixed["prompt"])
+         "[Shot 2] begins from <Picture 3>.", mixed["prompt"])
 check_in("the untexted middle image falls back to a composition anchor",
          "<Picture 2> is a composition anchor at 4s.", mixed["prompt"])
-# the role itself must survive: it picks which frame of a video segment is taken,
-# and whether it is fitted to the canvas (minimax_director.py, ref_image_tensors)
-check("the closing image keeps its role on the slot",
-      [s.get("keyframe") for s in flush["ref_image_slots"]],
-      [plan.ROLE_FIRST, plan.ROLE_LAST])
-check("a middle image carries no keyframe flag",
-      short["ref_image_slots"][1].get("keyframe"), None)
+# the role on the slot picks which frame of a video segment is taken, and whether it is
+# fitted to the canvas (minimax_director.py, ref_image_tensors). It follows the same rule
+# as the wording, so the prompt describes the frame that actually gets encoded.
+check("an image with no text of its own carries no keyframe flag",
+      [s.get("keyframe") for s in noshot_slots["ref_image_slots"]], [None, None])
 
 # fl2va must be untouched by that change — there the anchors are real
 fl = compile(tl([img(0, 144, "a.png"), img(144, 144, "b.png")]))
@@ -271,7 +280,7 @@ check("split_audio_music takes a label only at the start of a line",
 cf = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON",
                 prompt_format="comfyui"))
 check_in("the comfyui format keeps its own reference-notes line",
-         "Reference notes: The video begins from <Picture 1>", cf["prompt"])
+         "Reference notes: <Picture 1> is a composition anchor at 0s", cf["prompt"])
 check_not_in("the comfyui format has no minimax sections",
              "subject_definitions:", cf["prompt"])
 check("an unknown format falls back to minimax",
