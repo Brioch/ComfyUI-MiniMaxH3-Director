@@ -429,10 +429,11 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                                  tooltip="Drop the vision model from VRAM when done, so it is "
                                          "not still resident while H3 samples. Turn off only "
                                          "while iterating on prompts — reloading costs seconds, "
-                                         "an OOM costs the render. OLLAMA ONLY: nothing else "
-                                         "exposes an API to release a model, so with llama.cpp "
-                                         "or LM Studio it stays loaded and you have to set an "
-                                         "idle timeout on the server itself."),
+                                         "an OOM costs the render. Works with Ollama, and with "
+                                         "llama-server in router mode. A plain llama-server or "
+                                         "LM Studio cannot be told to let go over HTTP — give "
+                                         "those an idle timeout of their own "
+                                         "(llama.cpp: --sleep-idle-seconds N)."),
                 io.Combo.Input("on_error", options=["passthrough", "fail"],
                                default="passthrough", optional=True,
                                tooltip="'passthrough' hands your raw idea on and warns, so a "
@@ -503,15 +504,8 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
         # here: the VLM and H3 are usually on the same card, and a 7B vision model still
         # resident when sampling starts is the difference between a render and an OOM.
         keep_alive = 0 if unload_after else 300
-        # ...but keep_alive is Ollama's own field. Everywhere else the switch is a no-op and
-        # the model simply stays on the card while H3 samples, which on a 16GB machine is
-        # the difference between a render and thirty minutes of offloading (issue #9). Say
-        # so once rather than let the checkbox imply something it cannot deliver.
-        if unload_after and provider != "ollama":
-            log.warning("[MiniMaxEnhance] 'unload_after' only works with Ollama — %s has no "
-                        "API to release a model, so it stays in VRAM while H3 samples. Give "
-                        "your server its own idle timeout (llama.cpp: --keep-alive / -t), run "
-                        "it on the CPU, or put it on a different card.", provider)
+        # keep_alive is Ollama's own field; for everyone else the release happens in the
+        # `finally` below, over whatever protocol that server actually speaks.
         try:
             raw = await media.vlm_generate(b64, user, provider, url, model_name,
                                            system_prompt=system, timeout=300,

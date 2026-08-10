@@ -515,25 +515,62 @@ async def analyze_character_endpoint(request):
 async def unload_model(provider, base_url, model):
     """Evict the model from VRAM. Never raises — freeing memory must not fail a render.
 
-    `keep_alive: 0` on the generate call already asks for this, but a second, explicit
-    request is cheap and covers the cases where it did not take: a request that errored
-    before the option was honoured, or a server that keeps its own TTL.
-    Only Ollama exposes an unload API; LM Studio and OpenAI-compatible servers manage
-    residency themselves.
+    Two servers can be asked, by two different protocols:
+
+    * **Ollama** takes `keep_alive: 0` on a generate call. The generate request already
+      carries it, but asking again is cheap and covers the cases where it did not take —
+      a call that errored before the option was honoured, or a server with its own TTL.
+    * **llama.cpp in router mode** has `POST /models/unload` with `{"model": id}`, and
+      `GET /models` reporting `status: loaded|unloaded` per model. A plain
+      `llama-server -m model.gguf` has neither; there the answer is its own
+      `--sleep-idle-seconds`, which nothing here can set remotely.
+
+    LM Studio manages residency itself and exposes no unload over HTTP.
     """
-    if provider != "ollama" or not model:
+    if not model:
         return False
     try:
         import aiohttp
+    except Exception:
+        return False
+
+    if provider == "ollama":
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post("%s/api/generate" % base_url,
+                                        json={"model": model, "keep_alive": 0},
+                                        timeout=10) as response:
+                    await response.text()
+            log.info("[MiniMaxDirector] asked Ollama to release '%s'.", model)
+            return True
+        except Exception as e:
+            log.debug("[MiniMaxDirector] could not unload '%s': %s", model, e)
+            return False
+
+    # Anything else: try the llama.cpp router, and say plainly when it is not there rather
+    # than leaving a checkbox that quietly does nothing (issue #9).
+    try:
         async with aiohttp.ClientSession() as session:
-            async with session.post("%s/api/generate" % base_url,
-                                    json={"model": model, "keep_alive": 0},
-                                    timeout=10) as response:
-                await response.text()
-        log.info("[MiniMaxDirector] asked Ollama to release '%s'.", model)
-        return True
+            async with session.post("%s/models/unload" % base_url,
+                                    json={"model": model}, timeout=10) as response:
+                body = await response.text()
+                if response.status < 400:
+                    log.info("[MiniMaxDirector] asked the llama.cpp router to unload '%s'.",
+                             model)
+                    return True
+                if response.status in (404, 501):
+                    log.info(
+                        "[MiniMaxDirector] %s at %s has no /models/unload, so '%s' stays "
+                        "loaded while H3 samples. That endpoint only exists when llama-server "
+                        "runs in router mode; a plain one can unload itself with "
+                        "--sleep-idle-seconds N instead.", provider, base_url, model)
+                    return False
+                log.debug("[MiniMaxDirector] /models/unload returned %s: %s",
+                          response.status, body[:200])
+                return False
     except Exception as e:
-        log.debug("[MiniMaxDirector] could not unload '%s': %s", model, e)
+        log.debug("[MiniMaxDirector] could not reach %s to unload '%s': %s",
+                  base_url, model, e)
         return False
 
 
@@ -541,27 +578,18 @@ async def unload_model(provider, base_url, model):
 async def unload_ollama_endpoint(request):
     """Evict the analysis VLM from VRAM right before a run so it doesn't fight H3 for memory."""
     try:
-        import aiohttp
         try:
             data = await request.json()
         except Exception:
             data = {}
         provider, base_url, model_name = _resolve_provider(data)
-
-        if provider == "ollama":
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post("%s/api/generate" % base_url,
-                                            json={"model": model_name, "keep_alive": 0},
-                                            timeout=8) as response:
-                        await response.text()
-                log.info("[MiniMaxDirector] Asked Ollama to release '%s' before the run.", model_name)
-            except Exception:
-                pass  # not running / unreachable -> nothing to free
-            return web.json_response({"status": "ok", "provider": provider})
-
-        return web.json_response({"status": "ok", "provider": provider,
-                                  "note": "no-op (set a JIT/TTL unload in your server)"})
+        # one code path for every provider, so the gear menu and the Enhance node cannot
+        # disagree about what "unload" means
+        freed = await unload_model(provider, base_url, model_name)
+        return web.json_response({
+            "status": "ok", "provider": provider, "released": freed,
+            "note": "" if freed else "server exposes no unload — give it its own idle timeout",
+        })
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)})
 
