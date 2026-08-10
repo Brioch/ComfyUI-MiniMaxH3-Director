@@ -836,6 +836,41 @@ check_in("a written summary follows the prefix",
          compile(tl([img(0, 288, "a.png", prompt="she waits")], ref_mode="ON",
                     summary="She crosses the market."))["prompt"])
 
+# `summary` is a box like any other: a tag typed in it reached the model as a literal
+# "@ref1" before, because only the global prompt and the shot prompts were substituted.
+tagged_summary = compile(tl([img(0, 288, "a.png", prompt="@ref1 waits")], ref_mode="ON",
+                            subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                       "description": "a woman in a red coat"}],
+                            summary="@ref1 crosses the market."))
+check_in("a tag in the summary resolves like every other box",
+         "summary: [keyframe completion + reference generation] <Subject 1> crosses the "
+         "market.", tagged_summary["prompt"])
+check_not_in("no raw tag survives into the prompt", "@ref1", tagged_summary["prompt"])
+
+# The guide's section order puts summary above detailed_description, so that is where a
+# subject with no picture to lean on is introduced in full — and the shots below it get
+# the short handle, not a second introduction.
+noimg = compile(tl([img(0, 288, "a.png", prompt="@ref1 waits")], ref_mode="ON",
+                   subjects=[{"description": "a middle-aged baker with a raspy voice",
+                              "shortName": "the baker"}],
+                   summary="@ref1 opens the shop."))
+check_in("an imageless subject is introduced in the summary, being first in reading order",
+         "summary: [keyframe completion] a middle-aged baker with a raspy voice opens the "
+         "shop.", noimg["prompt"])
+check_in("and the shot below it uses the short name",
+         "[Shot 1] the baker waits.", noimg["prompt"])
+
+# fl2va has no summary section, so substituting one would mark a subject as introduced on
+# the strength of a sentence that never gets written out.
+noimg_off = compile(tl([img(0, 288, "a.png", prompt="@ref1 waits")],
+                       subjects=[{"description": "a middle-aged baker with a raspy voice",
+                                  "shortName": "the baker"}],
+                       summary="@ref1 opens the shop."))
+check_not_in("the hidden summary does not introduce anyone on the fl2va path",
+             "the baker waits", noimg_off["prompt"])
+check_in("so the shot still carries the full description",
+         "a middle-aged baker with a raspy voice waits", noimg_off["prompt"])
+
 # ------------------------------------------------- the cap leaves nothing dangling
 # The 12-file cap trims from the back. Every declaration and retention line has to
 # describe a reference that survived, and nothing may reference a dropped ordinal.

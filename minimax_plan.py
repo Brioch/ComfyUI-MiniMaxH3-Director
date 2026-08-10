@@ -1266,17 +1266,30 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             for slot, subject in subject_of_slot.items():
                 char_tag_values[slot] = "<Subject %d>" % subject
 
-    # Left to right through the finished video — the global block, then each shot in turn,
-    # its prose before its dialogue. `seen_slots` is what makes "the first appearance"
-    # mean the first one anywhere rather than the first one in this particular string:
-    # a subject that speaks in shot 1 and is described in shot 2 is introduced by its
-    # spoken line, not re-introduced afterwards.
+    # Left to right through the finished video — `summary`, then the global block, then
+    # each shot in turn, its prose before its dialogue. `seen_slots` is what makes "the
+    # first appearance" mean the first one anywhere rather than the first one in this
+    # particular string: a subject that speaks in shot 1 and is described in shot 2 is
+    # introduced by its spoken line, not re-introduced afterwards.
     #
     # Speakers are numbered in the same pass, which also has to happen after the tags
     # resolve to their labels and before the shot text is read back for
     # `(appears in [Shot N])` — a subject that only ever speaks still appears in the
     # shots where it speaks.
     seen_slots = set()
+
+    # `summary` is a box like any other, so a tag typed in it has to resolve like any
+    # other — it reached the model as a literal "@ref1" before this. It goes first because
+    # the guide's section order puts it above detailed_description, which is what "first
+    # appearance" has to mean here. Only ref2va emits the section: substituting it on the
+    # fl2va path would mark a slot as already introduced on the strength of a sentence
+    # that never gets written out, and the global prompt would then open with a short name
+    # for someone nothing had named yet.
+    summary_text = (summary or "").strip() or (tdata.get("summary", "") or "").strip()
+    if ref_mode_on:
+        summary_text = substitute_char_tags(summary_text, char_tag_values, char_tag_later,
+                                            seen_slots)
+
     global_prompt = substitute_char_tags(global_prompt, char_tag_values, char_tag_later,
                                          seen_slots)
 
@@ -1354,7 +1367,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             summary_line = " ".join(x for x in (
                 task_type_prefix(ref_image_slots, ref_video_segs, ref_audio_segs,
                                  tdata.get("task_type_override")),
-                (summary or "").strip() or (tdata.get("summary", "") or "").strip(),
+                summary_text,
             ) if x)
 
         # Only the fl2va path: ref2va has no keyframe slot and its guide asks for no
