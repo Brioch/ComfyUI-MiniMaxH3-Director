@@ -1450,6 +1450,11 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         "prompt_overridden": overridden, "compiled_prompt": compiled_prompt,
         "shots": shots, "events": events, "retake": retake,
         "ref_mode_on": ref_mode_on, "mode": mode,
+        # Which panel slot became which <Subject N>, keyed by 1-based slot. Not the slot
+        # number: only slots that hand over a reference image are numbered, so slot 2 is
+        # <Subject 1> when slot 1 is empty. The editor needs the answer to label its own
+        # menus, and working it out there would be a second copy of this rule.
+        "subject_of_slot": subject_of_slot,
         "ref_image_slots": ref_image_slots, "ref_notes": ref_notes,
         "ref_video_segs": ref_video_segs, "ref_audio_segs": ref_audio_segs,
         "ref_warnings": ref_warnings, "prompt_format": prompt_format,

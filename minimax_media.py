@@ -264,6 +264,10 @@ async def compile_prompt_endpoint(request):
             "refs": {"images": len(p["ref_image_slots"]),
                      "videos": len(p["ref_video_segs"]),
                      "audios": len(p["ref_audio_segs"])},
+            # slot -> <Subject N>, so the editor's "Voice of" menu can name subjects the way
+            # the prompt does instead of counting slots and getting a different answer
+            "subject_of_slot": {str(k): v for k, v in
+                                (p.get("subject_of_slot") or {}).items()},
             "overridden": bool(p.get("prompt_overridden")),
             # what the timeline would produce, so the panel can offer it back without
             # having to recompile behind the user's back

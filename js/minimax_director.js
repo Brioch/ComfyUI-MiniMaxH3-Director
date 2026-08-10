@@ -921,6 +921,14 @@ function subjectPanelHeight(slotCount, slotHeight) {
     + SUBJECT_STEPPER_H;
 }
 
+// The properties panel builds its rows with innerHTML, so text the user typed has to be
+// neutralised on the way in: a description holding a `<` took the row's markup with it.
+function escapeAttr(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 const SUBJECT_SLOTS_DEFAULT = 3;
 function clampSubjectSlots(n) {
   const v = parseInt(n, 10);
@@ -6266,16 +6274,9 @@ class TimelineEditor {
       // "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." — and without
       // somewhere to say it, a second voice reference is just another numbered clip with
       // no way to tell the model who is speaking (issue #10).
-      const chars = this.subjectSlots();
-      const options = ['<option value="">— not a specific subject —</option>'].concat(
-        chars.map((c, i) => {
-          const desc = (c.description || "").trim();
-          const label = desc ? `Subject ${i + 1} — ${desc.slice(0, 40)}` : `Subject ${i + 1}`;
-          const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
-          return `<option value="${i + 1}"${sel}>${label}</option>`;
-        })).join("");
+      const options = this._audioSubjectOptions(seg);
       this.audioInfoArea.innerHTML = `
-        File: <span>${seg.fileName || "Unknown"}</span><br>
+        File: <span>${escapeAttr(seg.fileName || "Unknown")}</span><br>
         Length: <span>${this.formatTime(seg.audioDurationFrames)}</span> Output Length: <span>${this.formatTime(seg.length)}</span><br>
         Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span><br>
         <label class="mmxd-audio-subject-label">Voice of:
@@ -9669,6 +9670,50 @@ class TimelineEditor {
     if (!this.summaryField) return;
     const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
     this.summaryField.style.display = refsOn ? "" : "none";
+  }
+
+  // Which slot is which `<Subject N>` is the planner's answer, taken from the last compile
+  // rather than worked out again here: only slots that hand over a reference image are
+  // numbered, so slot 2 is <Subject 1> when slot 1 is empty, and a menu that counted slots
+  // named a subject the prompt did not have.
+  //
+  // A slot with no number has no label for a clip to be tied to — its description goes into
+  // the prose instead — so it is offered as unavailable, with the reason, rather than
+  // taking the click and doing nothing with it.
+  _audioSubjectOptions(seg) {
+    const subjectOfSlot = this.node?._mmxSubjectOfSlot;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    return ['<option value="">— not a specific subject —</option>'].concat(
+      this.subjectSlots().map((c, i) => {
+        const desc = escapeAttr((c.description || "").trim().slice(0, 40));
+        const tail = desc ? ` — ${desc}` : "";
+        const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
+        const subject = subjectOfSlot?.[String(i + 1)];
+        if (subject) {
+          return `<option value="${i + 1}"${sel}>Subject ${subject}${tail}</option>`;
+        }
+        // No compile has answered yet: say nothing rather than guess a number
+        if (!subjectOfSlot) {
+          return `<option value="${i + 1}"${sel}>Slot ${i + 1}${tail}</option>`;
+        }
+        const why = !refsOn ? "Refs OFF sends no references"
+          : (c.images && c.images.length) ? "not among the references sent"
+          : "needs a reference image";
+        return `<option value="" disabled${sel}>Slot ${i + 1}${tail} — ${why}</option>`;
+      })).join("");
+  }
+
+  // The menu is built when a clip is selected, but what it says depends on the panel above
+  // it: drop an image into a slot and that slot becomes bindable, delete one and it stops.
+  // Only the options are replaced, so the `change` listener on the <select> survives — and
+  // not while it has focus, which would shut an open menu under the pointer.
+  refreshAudioSubjectMenu() {
+    if (this.selectionType !== "audio") return;
+    const sel = this.audioInfoArea?.querySelector(".mmxd-audio-subject");
+    if (!sel || document.activeElement === sel) return;
+    const seg = this.timeline.audioSegments?.[this.selectedIndex];
+    if (!seg) return;
+    sel.innerHTML = this._audioSubjectOptions(seg);
   }
 
   // The stepper owns this number and nothing else writes it. It used to grow on its own as
@@ -13828,6 +13873,12 @@ app.registerExtension({
             const d = await resp.json();
             if (d.status !== "success") throw new Error(d.message || "compile failed");
             pText.textContent = d.prompt || "";
+            // slot -> <Subject N>, straight from the planner, for the properties panel's
+            // "Voice of" menu to label itself by. Cached because that menu is built on
+            // selection, not on this refresh — and re-read here, because adding or deleting
+            // a reference image changes what it should say while it is already on screen.
+            self._mmxSubjectOfSlot = d.subject_of_slot || {};
+            self._timelineEditor?.refreshAudioSubjectMenu?.();
             // Keep the textarea in step with what is stored, but never while it has the
             // caret — clobbering someone's sentence mid-word is unforgivable.
             if (d.overridden && document.activeElement !== pEdit

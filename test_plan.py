@@ -1066,6 +1066,17 @@ check("a subject of 0 or nonsense is treated as unassigned",
        plan._audio_subject_slot({"subject": "none"}), plan._audio_subject_slot({}),
        plan._audio_subject_slot({"subject": "2"})),
       (None, None, None, None, 2))
+# The editor's "Voice of" menu labels itself from this, so it must be the planner's own
+# numbering and not the slot numbers: an empty slot 1 makes the image in slot 2 <Subject 1>.
+gap = compile(tl([img(0, 288, "a.png", prompt="he waits")], ref_mode="ON",
+                 characters=[{"images": [], "description": ""},
+                             {"images": [{"b64": "x", "name": "c.png"}],
+                              "description": "a man"}]))
+check("the slot -> subject map skips slots that hand over no image",
+      gap["subject_of_slot"], {2: 1})
+check("and it is empty with references off",
+      compile(tl([img(0, 288, "a.png", prompt="x")], characters=two_chars))["subject_of_slot"],
+      {})
 check("a clip pointing at a slot with no images binds nothing",
       "voice-timbre reference" in
       compile(tl([img(0, 288, "a.png", prompt="x")], ref_mode="ON",
