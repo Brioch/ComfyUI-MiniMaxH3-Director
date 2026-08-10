@@ -251,6 +251,11 @@ than that, and two of its sections were structurally missing from the output.
   (`images + videos` is at most 12 on its own, so the audio bucket always absorbs the
   excess).
 
+- **New node: MiniMax H3 Audio Preview.** H3 generates its stereo audio in the same pass as
+  the picture and ComfyUI's preview drops it. Wire `minimax_h3_audio_vae` into this node
+  anywhere between the Director's `model` output and the sampler, and you hear the shot while
+  it denoises — alongside whatever draws the frames, rather than instead of it.
+
 ## 0.1.6
 
 - **The compiled prompt can be written by hand.** `EDIT` on the prompt panel turns it into

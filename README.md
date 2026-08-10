@@ -53,7 +53,8 @@ Timeline images can be frame anchors, storyboard references, or subject-defining
 that get no `<Picture>` entry at all. Prompts gain a `summary` section with a derived
 `[task type]` prefix, and `retention_analysis` uses the guide's own line format. Dialogue
 written as `@ref1 says: …` is given speaker IDs and `<d>` tags for you. The reference panel
-resizes, with the extra height going to the image previews.
+resizes, with the extra height going to the image previews. New **MiniMax H3 Audio Preview**
+node lets you hear the shot while it denoises.
 
 **0.1.6** · 2026-08-10 — the compiled prompt can be written by hand and reverted, images on
 the `ref_images` wire can be described, an audio clip can name whose voice it is, and the
@@ -655,9 +656,60 @@ same frames without correcting for the compression, which runs the preview 3.35�
 Switch `playback` to `source fps` if that is the trade you want: motion at normal speed,
 clip over early.
 
-`vae (quality)` is the answer to "is there a small preview VAE, like LTX 2.3?" — there is
-not. MiniMax has not released a TAESD-style decoder (`latent_format.taesd_decoder_name` is
-`None`), so the choice is the cheap RGB approximation or the real video VAE.
+`vae (quality)` is the answer to "is there a small preview VAE, like LTX 2.3?" — not from
+MiniMax, and not one ComfyUI can select on its own. Kijai has since trained
+[a 24-channel tiny autoencoder for H3](https://huggingface.co/Kijai/MiniMax-H3-TAE)
+(`vae_approx/taeh3.safetensors`), which is what makes true-RGB previews possible in the
+packs that load `vae_approx` themselves — but core cannot reach it: `MiniMaxH3Video`
+leaves `taesd_decoder_name` at `None` and `taeh3` is not in `latent_preview.VIDEO_TAES`.
+Here the choice is still the cheap RGB approximation or the real video VAE.
+
+### Hearing the shot
+
+H3 generates stereo audio in the same forward pass as the picture, and every live preview in
+the ecosystem throws it away. Core is explicit about it: `prepare_callback` does
+`if x0.is_nested: x0 = x0.tensors[0]`, keeping the video stream and dropping the audio one —
+and `BinaryEventTypes` is `PREVIEW_IMAGE`, `UNENCODED_PREVIEW_IMAGE`, `TEXT`,
+`PREVIEW_IMAGE_WITH_METADATA`, so there is no member for sound to travel on even if it did.
+
+**MiniMax H3 Audio Preview** decodes that stream itself. Drop it anywhere between the
+Director's `model` output and the sampler, wire `minimax_h3_audio_vae`, and the node draws a
+waveform strip with a sound button.
+
+It is a **separate node** on purpose. Whatever you watch the frames with — the Preview
+Override above, or KJNodes' Preview Override with `taeh3` — the sound attaches next to it
+rather than dragging a second video preview along. Both wrappers register under their own
+keys, so they chain.
+
+| Widget | What it does |
+|---|---|
+| `audio_vae` | `minimax_h3_audio_vae`. Refuses anything without 32 latent channels, so the video VAE cannot land here by accident. |
+| `window_seconds` | Seconds to decode, from the **start** of the shot. Cost scales with it. `0` decodes the whole clip. |
+| `start_at_percent` | Skip decoding until this share of the steps is done (default 50). |
+| `every_n_steps` | Never update more often than every N sampler steps. |
+| `max_preview_overhead` | Share of render time this may use, in percent (default 15). |
+
+There is no tiny decoder for the audio, and none is needed. The real audio VAE takes
+`[B,32,2,T]` at 40 latent frames per second, and ComfyUI's own estimate for it is
+`max(42 MB, 220·samples + 20 MB)` — about **110 MB and a fraction of a second for a
+three-second window**, against ~520 MB for a whole 15 s clip. That is what `window_seconds`
+is for, and why it takes the *opening* seconds: a preview animation loops from frame one, so
+the head is the part that lines up with what you are watching.
+
+`start_at_percent` is there because early steps are not worth hearing — the audio stream is
+still mostly noise, and a decode spent there is a decode spent on hiss. Updates are also
+never sent faster than the clip plays, so you always hear one through instead of catching
+its first tenth of a second over and over.
+
+Two things to know:
+
+- **The strip is drawn; the sound is not played until you ask.** Browsers refuse to play
+  audio on a page that has not been clicked, and a queued render should not suddenly start
+  talking. The button is the gesture that unlocks it; `↻ replay` plays the last clip again.
+- **It can cost you the model.** Pulling a second VAE onto the GPU mid-sample can push the
+  DiT out of VRAM — the same trade `decode = vae (quality)` makes above. If the decode hits
+  the ceiling, the audio switches itself off for the rest of the run and the render carries
+  on.
 
 <details>
 <summary>Two non-obvious details, both of which produced real bugs here</summary>

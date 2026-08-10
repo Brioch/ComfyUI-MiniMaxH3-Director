@@ -17,18 +17,37 @@ The one non-obvious detail
 wraps the callback with the nested view. That wrapper sits *behind* an OUTER_SAMPLE
 wrapper in the call chain, so what reaches this callback is the flat pack, not the
 NestedTensor — `_video_stream` unpacks it with core's own `unpack_latents`.
+
+The audio half — a second node
+------------------------------
+H3 generates stereo sound in the same forward pass, and every preview in the ecosystem
+throws it away: core's `prepare_callback` keeps `x0.tensors[0]` and nothing else, and
+`BinaryEventTypes` has no audio member for it to travel on even if it did. So
+`MiniMaxH3AudioPreview` decodes the other stream itself and sends it on its own event.
+
+It is deliberately its own node rather than four more widgets on this one: whatever you
+watch the frames with — this node, KJNodes' Preview Override with `taeh3` — the sound
+attaches next to it instead of dragging a second video preview along. `_audio_stream` is
+`_video_stream`'s twin, taking the last packed stream instead of the first, and there is no
+tiny decoder for audio the way `taeh3` is one for video — nor does there need to be: a
+three-second window costs ~110 MB and a fraction of a second through the real audio VAE.
 """
 
 import base64
 import io as _io
 import logging
+import math
 import struct
 import time
+import wave
+from urllib.parse import quote
 
 import torch
 import torch.nn.functional as F
+from aiohttp import web
 from PIL import Image
 
+import comfy.model_management
 import comfy.patcher_extension
 import comfy.utils
 import latent_preview
@@ -36,14 +55,25 @@ import server
 from comfy_api.latest import io
 from protocol import BinaryEventTypes
 
+try:
+    # Handles `latent.is_nested -> unbind()[-1]`, picks the VAE's output sample rate and
+    # builds the AUDIO dict. Reusing it keeps the [B,2,L]/movedim shape dance out of here.
+    from comfy_extras.nodes_audio import vae_decode_audio
+except ImportError:                                   # pre-helper ComfyUI
+    vae_decode_audio = None
+
 log = logging.getLogger(__name__)
 
 EVENT = "minimax_h3_preview"
+AUDIO_EVENT = "minimax_h3_audio_preview"
 DECODE_FAST = "latent2rgb (fast)"
 DECODE_VAE = "vae (quality)"
 PLAYBACK_TRUE = "true speed"
 PLAYBACK_SOURCE = "source fps"
 MODEL_FPS = 24.0            # H3's native output rate
+AUDIO_LATENT_FPS = 40.0     # core: audio_t = round(duration * 40)
+AUDIO_CHANNELS = 32         # the audio stream's latent channel count, per MiniMaxH3AV
+ENVELOPE_BUCKETS = 192      # waveform strip resolution; a few hundred bytes of JSON
 TARGET_NODE = "node"
 TARGET_SAMPLER = "sampler (VHS)"
 TARGET_BOTH = "both"
@@ -60,6 +90,188 @@ def _video_stream(x0, latent_shapes=None):
     if latent_shapes and len(latent_shapes) > 1:
         return comfy.utils.unpack_latents(x0, list(latent_shapes))[0]
     return None
+
+
+def _audio_stream(x0, latent_shapes=None):
+    """Pull the [B, 32, 2, T] audio latent out of whatever the sampler handed us.
+
+    The mirror of `_video_stream`: video is the first packed stream and 5D, audio is the
+    last and 4D. The channel/stereo check is what keeps a plain 4D image latent from being
+    mistaken for sound on some other model.
+    """
+    if x0 is None:
+        return None
+    if getattr(x0, "is_nested", False):
+        # Core reaches into these two different ways — `.tensors[0]` in prepare_callback,
+        # `.unbind()[-1]` in vae_decode_audio. Accept either rather than bet on one.
+        streams = getattr(x0, "tensors", None)
+        if streams is None:
+            streams = x0.unbind()
+        return streams[-1]
+    if x0.ndim == 4 and x0.shape[1] == AUDIO_CHANNELS and x0.shape[2] == 2:
+        return x0
+    if latent_shapes and len(latent_shapes) > 1:
+        return comfy.utils.unpack_latents(x0, list(latent_shapes))[1]
+    return None
+
+
+def audio_scale_of(guider, streams=0):
+    """The factor the sampler carries the audio stream at, so a decode can undo it.
+
+    H3 denoises audio and video on different flow shifts, and ComfyUI reconciles that by
+    carrying the audio latent scaled onto the video schedule — `ModelSamplingAV.audio_scale`
+    is `shift / audio_shift`, so 12/3 = 4 with the Director's defaults. In sampler space the
+    audio target is that many times the latent the VAE expects, and core's own decode path
+    divides it back out (`MiniMaxH3._scale_audio_slice`).
+
+    Skipping it hands BigVGAN a latent several times too large, which comes back as loud
+    noise at every step of the schedule, while the video stream — carried at 1.0 — decodes
+    perfectly and so points at nothing.
+
+    `MiniMaxH3.audio_scale()` is the authority, but it answers 1.0 whenever the model's
+    `latent_shapes` is unset, which is not something a preview can rely on mid-sampling. When
+    the pack demonstrably has two streams and the accessor still says 1.0, ask
+    `model_sampling` directly rather than silently decoding at the wrong scale.
+    """
+    model = getattr(getattr(guider, "model_patcher", None), "model", None)
+    if model is None:
+        return 1.0
+
+    scale = None
+    try:
+        scale = float(model.audio_scale())
+    except Exception:
+        pass
+    if (scale is None or scale == 1.0) and streams > 1:
+        try:
+            scale = float(model.model_sampling.audio_scale)
+        except Exception:
+            pass
+    return scale if scale and scale > 0.0 else 1.0
+
+
+def audio_latent_window(latent, window_seconds):
+    """The first `window_seconds` of a [B, 32, 2, T] audio latent. 0 keeps the whole clip.
+
+    Head, not tail: the preview animation loops from the start of the shot, so the opening
+    seconds are the ones that line up with the frames you are watching.
+    """
+    if window_seconds <= 0:
+        return latent
+    frames = max(1, int(round(window_seconds * AUDIO_LATENT_FPS)))
+    if frames >= latent.shape[-1]:
+        return latent
+    return latent[..., :frames].contiguous()
+
+
+def _decode_audio(audio_vae, latent, window_seconds, audio_scale=1.0):
+    """[B, 32, 2, T] in sampler space -> ({"waveform": [B, 2, L], "sample_rate": int})."""
+    latent = audio_latent_window(latent, window_seconds).to(torch.float32)
+    if audio_scale != 1.0:
+        latent = latent / audio_scale
+    if vae_decode_audio is not None:
+        return vae_decode_audio(audio_vae, {"samples": latent})
+    waveform = audio_vae.decode(latent)                # [B, L, 2] — decode moves channels last
+    if waveform.ndim == 3:
+        waveform = waveform.movedim(-1, 1)
+    return {"waveform": waveform.to(torch.float32).cpu(),
+            "sample_rate": int(getattr(audio_vae, "audio_sample_rate", 32000))}
+
+
+def _stereo(waveform):
+    """[B, C, L] or [C, L] -> a single [2, L] float32 CPU clip. Level untouched."""
+    wav = waveform[0] if waveform.ndim == 3 else waveform
+    wav = wav.to(torch.float32).cpu()
+    if wav.shape[0] == 1:
+        wav = wav.repeat(2, 1)
+    return wav[:2].contiguous()
+
+
+def _normalise(wav, peak):
+    """Scale a clip into [-1, 1] rather than clipping it.
+
+    A mid-sampling x0 is not a finished latent, and a vocoder handed an off-distribution one
+    answers with something far outside [-1, 1]. Clipping that produces a saturated square
+    wave: audible as noise, and a solid rectangle in the envelope — which hides the one
+    number that would have explained it. Scaling keeps the shape, and the logged peak says
+    how far out the decode was.
+    """
+    if peak <= 1.0:
+        return wav
+    return wav / peak
+
+
+def _envelope(wav, buckets=ENVELOPE_BUCKETS):
+    """Per-bucket peak of |sample|, one row per channel, for the waveform strip.
+
+    Worth its few hundred bytes on its own: browsers refuse to play sound until the page
+    has been interacted with, and a strip you can always see is the difference between
+    "the audio preview is broken" and "the audio preview is muted".
+    """
+    n = int(wav.shape[-1])
+    if n == 0:
+        return []
+    step = max(1, math.ceil(n / max(1, buckets)))
+    padded = F.pad(wav.abs(), (0, step * math.ceil(n / step) - n))
+    peaks = padded.reshape(wav.shape[0], -1, step).amax(dim=-1).clamp(0, 1)
+    return [[round(float(v), 3) for v in row] for row in peaks]
+
+
+def _encode_wav(wav, sample_rate):
+    """[2, L] -> 16-bit PCM WAV bytes, through the standard library.
+
+    Compressing this through `av` would save ~95% of it, but the MP3 that produced — even
+    following ComfyUI's own SaveAudioMP3 recipe — came out as a file the browser refused,
+    with nothing in the Python log to show for it. Any codec added here needs its output
+    verified, not assumed. WAV's bytes can be checked offline, and are.
+    """
+    pcm = (wav.movedim(0, -1) * 32767.0).round().clamp(-32768, 32767).to(torch.int16)
+    buf = _io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(int(wav.shape[0]))
+        w.setsampwidth(2)
+        w.setframerate(int(sample_rate))
+        w.writeframes(pcm.contiguous().numpy().tobytes())
+    return buf.getvalue()
+
+
+# node_id -> (mime, bytes). One live clip per node: each update replaces the last, so this
+# holds a few hundred KB per audio preview node in the graph and nothing after the tab
+# closes the workflow.
+_AUDIO_CLIPS = {}
+AUDIO_ROUTE = "/minimax_h3/audio_preview"
+
+
+def _register_audio_route():
+    """Serve the clip over HTTP rather than embedding it in the page.
+
+    Both ways of putting audio *in* the document were refused by the browser for bytes that
+    are a valid WAV — a data: URI as "media resource not suitable", a blob: URL as "failed to
+    open channel". That pattern is a CSP or an extension restricting media schemes, not a
+    codec problem, and no amount of re-encoding fixes it. An ordinary same-origin GET with a
+    Content-Type is what core's PreviewAudio relies on; nothing about it is unusual enough to
+    be blocked, and it keeps half a megabyte of base64 off the websocket as well.
+    """
+    try:
+        routes = server.PromptServer.instance.routes
+    except Exception as e:
+        log.warning("[MiniMaxDirector] could not register the audio preview route (%r) — "
+                    "the audio preview will have nothing to fetch.", e)
+        return
+
+    @routes.get(AUDIO_ROUTE)
+    async def _audio_preview(request):
+        clip = _AUDIO_CLIPS.get(request.query.get("node_id", ""))
+        if clip is None:
+            return web.Response(status=404, text="no audio preview clip for this node")
+        mime, data = clip
+        # no-store because the URL is per-update anyway; range requests are unnecessary for
+        # a few hundred KB the element can buffer in one go.
+        return web.Response(body=data, content_type=mime,
+                            headers={"Cache-Control": "no-store"})
+
+
+_register_audio_route()
 
 
 def _pick_frames(video, max_frames):
@@ -363,6 +575,239 @@ class _OuterSampleWrapper:
         return out
 
 
+class _AudioOuterSampleWrapper:
+    """Decodes the audio stream on the way through sampling and streams it to its node.
+
+    Its own wrapper under its own key, so it chains with whatever draws the frames — this
+    pack's Preview Override or KJNodes' with `taeh3` — instead of replacing it.
+    """
+
+    def __init__(self, node_id, audio_vae, window_seconds, start_at_percent,
+                 every_n_steps, max_overhead):
+        self.node_id = node_id
+        self.audio_vae = audio_vae
+        self.window_seconds = max(0.0, float(window_seconds))
+        self.start_at_percent = max(0, min(100, int(start_at_percent)))
+        self.every_n_steps = max(1, int(every_n_steps))
+        self.max_overhead = max(0, min(100, int(max_overhead)))
+
+    def _due(self, step, total_steps, state):
+        """Whether to spend a decode on this step.
+
+        Early steps are not worth hearing — the audio stream is still mostly noise — and
+        this decode is the one that can evict the model it is listening to, so it stays
+        behind an explicit share of the schedule.
+        """
+        if state["off"] or step % self.every_n_steps:
+            return False
+        return (step + 1) >= total_steps * self.start_at_percent / 100.0
+
+    def _skip(self, now, state):
+        """Throttle: the overhead budget, but never shorter than the clip being played.
+
+        Replacing the clip restarts it, so sending one every step means never hearing past
+        its first moment — the same argument the video preview makes about its animation.
+        """
+        gap = max(throttle_gap(state["cost"], self.max_overhead), state["clip"])
+        return gap > 0 and (now - state["finished"]) < gap
+
+    def _payload(self, x0, latent_shapes, state, audio_scale=1.0):
+        """Decode to a clip the route can serve + a peak envelope, or None. Never raises."""
+        try:
+            latent = _audio_stream(x0, latent_shapes)
+            if latent is None or latent.ndim != 4:
+                if not state["warned"]:
+                    state["warned"] = True
+                    log.info("[MiniMaxDirector] no audio stream in this latent — the audio "
+                             "preview needs MiniMax H3's packed audio+video latent.")
+                return None
+            audio = _decode_audio(self.audio_vae, latent, self.window_seconds, audio_scale)
+            wav = _stereo(audio["waveform"])
+            peak = float(wav.abs().max()) if wav.numel() else 0.0
+            wav = _normalise(wav, peak)
+            sample_rate = int(audio.get("sample_rate") or 32000)
+            data = _encode_wav(wav, sample_rate)
+            seconds = wav.shape[-1] / float(max(1, sample_rate))
+            # Park the bytes for the route to serve, and hand the node a fresh URL each time
+            # so nothing can be answered from cache.
+            _AUDIO_CLIPS[self.node_id] = ("audio/wav", data)
+            state["seq"] += 1
+            if not state["logged"]:
+                state["logged"] = True
+                # The peak is the number that tells you whether the decode landed: a real
+                # waveform sits inside +/-1, and a latent decoded at the wrong scale does not.
+                log.info("[MiniMaxDirector] audio preview: %.2fs of %d Hz stereo per update, "
+                         "audio_scale %.3f, peak %.2f%s, %d KB served from %s.",
+                         seconds, sample_rate, audio_scale, peak,
+                         " (scaled down to fit)" if peak > 1.0 else "",
+                         len(data) // 1024, AUDIO_ROUTE)
+            return {"url": "%s?node_id=%s&seq=%d" % (AUDIO_ROUTE,
+                                                     quote(str(self.node_id)), state["seq"]),
+                    "audio_mime": "audio/wav", "kb": len(data) // 1024,
+                    "seconds": round(seconds, 2), "envelope": _envelope(wav)}
+        except comfy.model_management.OOM_EXCEPTION:
+            state["off"] = True
+            log.warning("[MiniMaxDirector] the audio preview ran out of memory — it is off "
+                        "for the rest of this run and the render continues. Lower "
+                        "window_seconds, or take the node out.")
+        except Exception as e:
+            state["off"] = True
+            log.warning("[MiniMaxDirector] audio preview failed, the render continues "
+                        "without it: %r", e, exc_info=True)
+        return None
+
+    def __call__(self, executor, noise, latent_image, sampler, sigmas, denoise_mask,
+                 callback, disable_pbar, seed, **kwargs):
+        latent_shapes = kwargs.get("latent_shapes")
+        guider = executor.class_obj
+        original_cb = callback
+        state = {"off": False, "warned": False, "logged": False, "sent": 0, "seq": 0,
+                 "cost": 0.0, "finished": 0.0, "clip": 0.0, "steps": 0, "due": 0,
+                 "scale": None}
+        log.info("[MiniMaxDirector] audio preview: %s from %d%% of the steps, <=%d%% "
+                 "overhead.",
+                 "the whole clip" if self.window_seconds <= 0
+                 else "%.1fs" % self.window_seconds,
+                 self.start_at_percent, self.max_overhead)
+
+        def combined(step, x0, x, total_steps):
+            state["steps"] += 1
+            if x0 is not None and self._due(step, total_steps, state):
+                state["due"] += 1
+                if not self._skip(time.time(), state):
+                    t0 = time.time()
+                    if state["scale"] is None:
+                        state["scale"] = audio_scale_of(
+                            guider, len(latent_shapes) if latent_shapes else 0)
+                    payload = self._payload(x0, latent_shapes, state, state["scale"])
+                    if payload:
+                        payload.update({"node_id": self.node_id, "step": step + 1,
+                                        "total_steps": total_steps,
+                                        "ms": int((time.time() - t0) * 1000)})
+                        server.PromptServer.instance.send_sync(AUDIO_EVENT, payload)
+                        state["sent"] += 1
+                        state["clip"] = float(payload["seconds"])
+                    state["cost"] = time.time() - t0
+                    state["finished"] = time.time()
+            if original_cb is not None:
+                original_cb(step, x0, x, total_steps)
+
+        out = executor(noise, latent_image, sampler, sigmas, denoise_mask, combined,
+                       disable_pbar, seed, **kwargs)
+        self._report(state, latent_shapes)
+        return out
+
+    def _report(self, state, latent_shapes):
+        """Say what happened, and when nothing happened say which gate stopped it.
+
+        A preview that silently shows nothing is indistinguishable from a preview that is
+        broken, so every path out of here ends in a line you can act on.
+        """
+        if state["sent"]:
+            log.info("[MiniMaxDirector] audio preview sent %d update(s).", state["sent"])
+        elif state["steps"] == 0:
+            log.warning("[MiniMaxDirector] audio preview: the sampler never called back, so "
+                        "nothing was decoded. The node is in the graph, but is its 'model' "
+                        "output the one actually wired into the sampler?")
+        elif state["off"]:
+            log.warning("[MiniMaxDirector] audio preview: nothing was sent — it switched "
+                        "itself off after the failure logged above.")
+        elif state["due"] == 0:
+            log.warning("[MiniMaxDirector] audio preview: no step passed the gate over %d "
+                        "sampled step(s), so nothing was sent. start_at_percent=%d%% waits "
+                        "for step %d, and every_n_steps=%d has to land on it.",
+                        state["steps"], self.start_at_percent,
+                        int(state["steps"] * self.start_at_percent / 100.0) or 1,
+                        self.every_n_steps)
+        else:
+            log.warning("[MiniMaxDirector] audio preview: %d step(s) were due but no audio "
+                        "stream was found in the latent (latent_shapes %s), so nothing was "
+                        "sent. This needs MiniMax H3's packed audio+video latent — the "
+                        "Director's, or EmptyMiniMaxH3LatentAV — not a video-only one.",
+                        state["due"], "present" if latent_shapes else "absent")
+
+
+class MiniMaxH3AudioPreview(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MiniMaxH3AudioPreviewCS",
+            display_name="MiniMax H3 Audio Preview",
+            category="MiniMax H3",
+            description=(
+                "Hear the shot while it denoises. H3 generates stereo audio in the same "
+                "forward pass as the picture, and ComfyUI's preview discards it: "
+                "prepare_callback keeps x0.tensors[0] and drops the audio stream, and the "
+                "preview socket has no audio event to carry it anyway. This node decodes "
+                "that stream itself and shows a waveform you can play. It is separate from "
+                "the video preview on purpose — chain it with either this pack's Preview "
+                "Override or KJNodes' with taeh3. Wire it anywhere between the Director's "
+                "model output and the sampler."
+            ),
+            inputs=[
+                io.Model.Input("model", tooltip="Model to attach the audio preview to."),
+                io.Vae.Input("audio_vae",
+                             tooltip="minimax_h3_audio_vae. The real decoder — H3's audio "
+                                     "has no tiny equivalent of taeh3, and does not need "
+                                     "one: a three-second window is ~110 MB and a fraction "
+                                     "of a second."),
+                io.Float.Input("window_seconds", default=3.0, min=0.0, max=15.0, step=0.5,
+                               tooltip="Seconds of audio to decode, from the START of the "
+                                       "shot — the part that lines up with a preview "
+                                       "animation looping from frame one. Cost scales with "
+                                       "it. 0 decodes the whole clip (~520 MB at 15s)."),
+                io.Int.Input("start_at_percent", default=50, min=0, max=100, step=5,
+                             tooltip="Don't decode until this share of the steps is done. "
+                                     "Early on the audio stream is still mostly noise, so "
+                                     "the decodes would be spent on hiss."),
+                io.Int.Input("every_n_steps", default=1, min=1, max=50, step=1,
+                             optional=True,
+                             tooltip="Never update more often than every N sampler steps."),
+                io.Int.Input("max_preview_overhead", default=15, min=0, max=100, step=5,
+                             optional=True,
+                             tooltip="Cap on how much of the render time this may use, in "
+                                     "percent. Updates are also never sent faster than the "
+                                     "clip plays, so you always hear one through. 0 "
+                                     "disables the cap."),
+            ],
+            outputs=[io.Model.Output(tooltip="Model with the audio preview attached.")],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(cls, model, audio_vae, window_seconds=3.0, start_at_percent=50,
+                every_n_steps=1, max_preview_overhead=15) -> io.NodeOutput:
+        # Two VAE sockets in one workflow is an easy mix-up, and it would otherwise land
+        # mid-sample as a shape error. The audio VAE is the one with 32 latent channels;
+        # H3's video VAE has 24.
+        if getattr(audio_vae, "latent_channels", None) != AUDIO_CHANNELS:
+            raise ValueError(
+                "MiniMax H3 Audio Preview: 'audio_vae' has %s latent channels, not %d — "
+                "that looks like the video VAE. Wire minimax_h3_audio_vae there."
+                % (getattr(audio_vae, "latent_channels", "unknown"), AUDIO_CHANNELS)
+            )
+
+        m = model.clone()
+        wrapper = _AudioOuterSampleWrapper(
+            str(cls.hidden.unique_id), audio_vae, window_seconds, start_at_percent,
+            every_n_steps, max_preview_overhead)
+
+        # Its own key, so this chains with the video preview's wrapper instead of
+        # displacing it. Registered where CFGGuider actually looks — see the video node.
+        comfy.patcher_extension.add_wrapper_with_key(
+            comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
+            "minimax_h3_audio_preview", wrapper, m.model_options, is_model_options=True)
+
+        registered = comfy.patcher_extension.get_all_wrappers(
+            comfy.patcher_extension.WrappersMP.OUTER_SAMPLE, m.model_options,
+            is_model_options=True)
+        if wrapper not in registered and hasattr(m, "add_wrapper_with_key"):
+            log.info("[MiniMaxDirector] using ModelPatcher-side wrapper registration.")
+            m.add_wrapper_with_key(comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
+                                   "minimax_h3_audio_preview", wrapper)
+        return io.NodeOutput(m)
+
+
 class MiniMaxH3PreviewOverride(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -374,7 +819,9 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
                 "Live preview of the whole shot while it denoises, shown on this node. "
                 "Core previews only ever draw the first latent frame; MiniMax H3's packed "
                 "audio+video latent also has to be unpacked first, which the LTX preview "
-                "nodes do not do. Wire between the Director's model output and the sampler."
+                "nodes do not do. Wire between the Director's model output and the sampler. "
+                "For the shot's sound, add MiniMax H3 Audio Preview — core's preview "
+                "discards that half of the latent."
             ),
             inputs=[
                 io.Model.Input("model", tooltip="Model to attach the preview to."),
