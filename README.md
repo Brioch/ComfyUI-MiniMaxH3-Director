@@ -30,6 +30,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [Quick start](#quick-start)
 - [The timeline](#the-timeline)
 - [Prompt format](#prompt-format)
+- [Writing it yourself](#writing-it-yourself)
 - [Live preview while sampling](#live-preview-while-sampling)
 - [Writing the prompt for you](#writing-the-prompt-for-you)
 - [Retake Mode](#retake-mode)
@@ -53,6 +54,10 @@ that get no `<Picture>` entry at all. Prompts gain a `summary` section with a de
 `[task type]` prefix, and `retention_analysis` uses the guide's own line format. Dialogue
 written as `@ref1 says: …` is given speaker IDs and `<d>` tags for you. The reference panel
 resizes, with the extra height going to the image previews.
+
+**0.1.6** · 2026-08-10 — the compiled prompt can be written by hand and reverted, images on
+the `ref_images` wire can be described, an audio clip can name whose voice it is, and the
+live preview lets you choose between true speed and the shot's own frame rate.
 
 **0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
 phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
@@ -405,15 +410,20 @@ Subject slots carry both in the panel. Timeline images, reference videos and aud
 carry theirs in the properties panel when selected. Leave either empty and a sentence is
 generated instead — the boxes are overrides, never obligations.
 
-**describes** is what lets you write relationships the timeline cannot work out. The guide
-links a voice reference to the speaker it belongs to:
+**describes** is what lets you write relationships the timeline cannot work out — anything
+beyond what the panel's own fields already state:
 
 ```
-<Audio 1> is the voice-timbre reference for <Subject 1> (S1).
+<Audio 1> is the gravel in his voice and nothing else about the take.
 ```
 
 Type the part after `is` — the label is added for you, so it cannot come out wrong or
 doubled. Paste a whole line that already starts with its label and it is taken as written.
+
+One such relationship has its own control rather than a box: an audio clip's **Voice of**
+picks a subject, and the declaration becomes the guide's `<Audio 1> is the voice-timbre
+reference for <Subject 1>.` A **describes** line still wins over it, for when the binding
+is not the whole story.
 
 Frame anchors and storyboard references are the one exception: they have **retained**
 alone. Their declaration states where the image sits in the video (`<Picture 2> is the
@@ -468,12 +478,25 @@ frame. Right-click a timeline image to say which of the three it is:
 
 | Used as | Result |
 |---|---|
-| **frame anchor** (default) | `<Picture 2> is the first frame of [Shot 1].` — its position on the timeline decides first / last / keyframe |
+| **frame anchor** (default) | `<Picture 2> is the first frame of [Shot 1].` — an image opens its own shot, so this is what it is unless you flag the segment as an end frame; one with no text of its own is a composition anchor instead |
 | **storyboard** | `<Picture 3> is a storyboard reference for [Shot 2], defining its viewpoint, subject placement, and shot order.` |
 | **defines a subject** | No `<Picture>` entry at all. Cited inside a `<Subject N>` line instead, exactly as the guide requires for an image that "is used only to define a character, scene, costume, or style". |
 
 A subject-only image also stops being a keyframe, so it is no longer fitted to the output
 canvas — the full reference reaches the model instead of a cropped one.
+
+**How many slots there are is yours to set** — the stepper above the panel goes from 1 to
+9, starting at 3. Each slot holds two images, and H3 takes nine reference images in total,
+so nine is where slots stop being useful rather than where the model gives up. `−` takes
+the last slot away along with whatever is in it, which is the one control here that throws
+work away; the tooltip says so.
+
+An **audio clip on the timeline can name whose voice it is**: pick a subject in the clip's
+info panel and the prompt says so in the guide's own words — `<Audio 1> is the voice-timbre
+reference for <Subject 1>.` Leave it unset and the clip stays a general voice reference, as
+before. The guide's own example ends that sentence with a speaker ID, `(S1)`; this does not,
+because IDs are handed out in the order voices are actually heard and a subject with a voice
+reference need never speak. Where the subject does speak, the ID is on the line itself.
 
 **Analyze** is optional and off the critical path. It sends the slot image to a local
 vision model and pastes back a one-line description, so `@ref1` still means something in
@@ -488,8 +511,11 @@ To use it, run a vision model locally and point the gear menu's provider row at 
 | LM Studio | `http://127.0.0.1:1234` | load a vision model, start the local server |
 | Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint |
 
-With Ollama the node also asks it to unload the model before a render, so the VLM does not
-sit in VRAM while H3 samples.
+The node also asks the server to release the model before a render, so the VLM is not still
+in VRAM while H3 samples. Ollama takes `keep_alive: 0`; llama-server does too **in router
+mode**, via `POST /models/unload`. A plain `llama-server -m model.gguf` has no such
+endpoint — give it `--sleep-idle-seconds N` and it will let go by itself. LM Studio manages
+residency on its own.
 
 **Keyframes go on the first and last frame only.** H3's `PackedLayout` anchors exactly
 those two positions; an image stranded in the middle of a window is reported in the
@@ -564,6 +590,20 @@ instead. Only real frame and storyboard anchors are declared as pictures.
 **ComfyUI** switches to `[0s-1.5s] …`, the notation the ComfyUI H3 templates use. Same
 timeline, same references, only the wording changes — so it is a fair A/B.
 
+### Writing it yourself
+
+**EDIT** on the COMPILED PROMPT panel hands the text over to you. It starts as whatever the
+timeline just compiled, so there is nothing to retype, and **REVERT** throws your version
+away and compiles again. While it is on, the panel is titled `PROMPT (HAND-WRITTEN)` and
+says that timeline edits no longer touch the text.
+
+Only the text is yours. Which images, videos and audio clips are loaded still comes from the
+timeline — the tokenizer numbers `<Picture i>` in the order the plan decided, and rewriting
+a sentence cannot renumber that without invalidating what you just wrote. Your version is
+kept as written rather than merged into the next recompile: an edit that vanished when you
+nudged a segment would lose work without asking, and one that survived in silence would stop
+matching the timeline you are looking at.
+
 ### Why a storyboard and not a per-segment mask
 
 If you know LTX Director: its Prompt Relay builds a cross-attention mask so each segment
@@ -592,6 +632,7 @@ and renders the whole shot as it denoises.
 | `preview_target` | `node` shows it on this node — always available. `sampler (VHS)` puts it in the sampler's usual preview slot and needs [VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) installed; `both` does both. |
 | `preview_frames` | Cap on **latent** frames used, thinned evenly across the shot, so it shortens nothing. The main cost knob. |
 | `preview_fps` | The shot's frame rate. A FLOAT, so the Director's `fps` output wires straight in. |
+| `playback` | `true speed` (default) spreads the sampled frames across the shot's real length, so the preview lasts as long as the finished clip. `source fps` plays them at `preview_fps` flat, like ComfyUI's own preview. |
 | `max_resolution` | Long edge of the preview image, as a **target** — latent2rgb frames arrive at latent size (a 1344×768 shot is an 84×48 grid), so this upscales them smoothly. |
 | `webp_quality` | Quality of the animation sent to the browser. |
 | `every_n_steps` | Never preview more often than every N sampler steps. |
@@ -604,6 +645,15 @@ decode, scale and encode that preview. Not browser time, not the sampler. With
 because the real decoder expands 37 latent frames into 124 output frames through a 5 GB
 VAE. Capping the frame *rate* would not help — rate only sets playback speed. The cost
 knobs are `preview_frames` (try 4–8 for VAE), `max_resolution` and `every_n_steps`.
+
+**Why the badge says `4.7fps of 24`.** With `true speed` the rate is derived, not set: the
+frames that survive thinning are spread across the shot's real length. In `latent2rgb`
+there is one image per latent frame and H3 compresses time about 3.35×, so a 124-frame shot
+has 37 images to show and the rate cannot pass `preview_fps / 3.35` — measured, 7.16 fps at
+24. That is not a setting being ignored; other packs show a round 24 because they play the
+same frames without correcting for the compression, which runs the preview 3.35× too fast.
+Switch `playback` to `source fps` if that is the trade you want: motion at normal speed,
+clip over early.
 
 `vae (quality)` is the answer to "is there a small preview VAE, like LTX 2.3?" — there is
 not. MiniMax has not released a TAESD-style decoder (`latent_format.taesd_decoder_name` is

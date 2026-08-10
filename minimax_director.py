@@ -45,6 +45,11 @@ log = logging.getLogger(__name__)
 
 MODEL_FPS = plan.MODEL_FPS
 DEFAULT_W, DEFAULT_H = 1344, 768
+# Measured, not assumed: 32x32 renders end to end, 16x16 passes PackedLayout and then dies
+# inside the video VAE, and anything under 8 leaves a zero-edged latent that takes core's
+# PackedLayout down first. 32 is also H3's own step, which is why divisible_by defaults to
+# it — with the defaults this floor is unreachable anyway.
+MIN_CANVAS_EDGE = 32
 
 
 # --------------------------------------------------------------------------------------
@@ -341,6 +346,12 @@ class MiniMaxH3Director(io.ComfyNode):
                 io.Image.Input("ref_images", optional=True,
                                tooltip="Extra <Picture i> references (single image or batch), appended after the "
                                        "character slots. ref2va only."),
+                io.String.Input("ref_image_notes", multiline=True, default="", optional=True,
+                                tooltip="One line per image on 'ref_images', describing what it "
+                                        "is: 'the kitchen set', 'a storyboard reference for the "
+                                        "opening'. Without a line the picture is still numbered "
+                                        "but the prompt says nothing about it. Blank lines count, "
+                                        "so line 3 always belongs to the third image."),
                 io.Float.Input("start", force_input=True, optional=True, default=0.0,
                                tooltip="Automation (connection-only). Window start in SECONDS."),
                 io.Float.Input("end", force_input=True, optional=True, default=0.0,
@@ -402,7 +413,7 @@ class MiniMaxH3Director(io.ComfyNode):
                 divisible_by=32, img_compression=0, audio_vae=None,
                 use_custom_audio=False, inpaint_audio=True, use_custom_motion=True,
                 override_audio=False, ref_image_size="match",
-                shift_video=12.0, shift_audio=3.0, ref_images=None,
+                shift_video=12.0, shift_audio=3.0, ref_images=None, ref_image_notes="",
                 start=None, end=None, duration=None) -> io.NodeOutput:
 
         mm = core()
@@ -424,7 +435,8 @@ class MiniMaxH3Director(io.ComfyNode):
                                use_custom_motion=use_custom_motion,
                                use_custom_audio=use_custom_audio,
                                override_audio=override_audio,
-                               extra_ref_image_count=extra_refs)
+                               extra_ref_image_count=extra_refs,
+                               ref_image_notes=ref_image_notes)
 
         length = p["length"]
         if length > plan.TRAINED_MAX_FRAMES:
@@ -472,6 +484,19 @@ class MiniMaxH3Director(io.ComfyNode):
             canvas_src = p["events"][0]["tensor"] if p["events"] else None
         width, height = resolve_canvas(mm, int(custom_width), int(custom_height),
                                        int(divisible_by), resize_method, canvas_src)
+
+        # Core's PackedLayout divides by `math.sqrt(latent_h * latent_w)`, so a zero-edged
+        # latent takes it down with a bare "float division by zero" six frames deep, naming
+        # nothing that would lead back here. A slightly larger canvas clears that and then
+        # fails inside the video VAE instead. Neither is reachable with the default
+        # divisible_by of 32; custom_width=4 with divisible_by=1 is (issue #4).
+        if width < MIN_CANVAS_EDGE or height < MIN_CANVAS_EDGE:
+            raise ValueError(
+                "MiniMax H3 Director: the canvas came out %dx%d. H3 needs at least %dpx per "
+                "side — below that its VAE has nothing left to work with and the failure "
+                "surfaces deep in ComfyUI as a division by zero. Raise custom_width / "
+                "custom_height, or raise divisible_by (32 is H3's own step)."
+                % (width, height, MIN_CANVAS_EDGE))
 
         def fit(tensor):
             out = media.resize_image(tensor, width, height, resize_method, int(divisible_by))

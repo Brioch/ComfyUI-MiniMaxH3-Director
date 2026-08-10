@@ -84,6 +84,46 @@ app.registerExtension({
       if (this.size[1] < 520) this.size[1] = 520;
     };
 
+    // Heal combo widgets whose saved value is not one of their options.
+    //
+    // ComfyUI stores widgets_values positionally, so a workflow saved while the widget
+    // list had a different shape hands every value after the change to the wrong input —
+    // and a combo then refuses to run with "The value true is not available". The values
+    // themselves are unrecoverable at that point; what matters is that the node comes back
+    // usable instead of blocking the whole workflow. Same idea as js/minimax_titles.js
+    // healing stale titles.
+    const onConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function (info) {
+      const r = onConfigure?.apply(this, arguments);
+      for (const w of this.widgets || []) {
+        const opts = w.options?.values;
+        if (!Array.isArray(opts) || opts.length === 0) continue;
+        if (opts.includes(w.value)) continue;
+        const fallback = w.options?.default ?? opts[0];
+        console.warn(
+          `[MiniMaxDirector] ${NODE_TYPE}: saved value ${JSON.stringify(w.value)} is not a ` +
+          `valid '${w.name}' — this workflow was saved against a different widget layout. ` +
+          `Falling back to ${JSON.stringify(fallback)}; check the node's settings.`);
+        w.value = fallback;
+      }
+
+      // A widget added since this workflow was saved pushes the preview panel down by one
+      // row, and the panel has a floor it will not shrink below — so on a node saved at
+      // its old minimum the panel ends up hanging out of the body. Measured: with the
+      // rows this node has now, anything under computeSize() overflows by exactly the
+      // difference. Grow to that minimum, never shrink: the height above it is the
+      // user's choice.
+      const min = this.computeSize()[1];
+      if (this.size[1] < min) {
+        this.size[1] = min;
+        // the draw loop only re-arranges widgets for nodes carrying this flag; without it
+        // the body would redraw at the new height while the overlay keeps the old one
+        this._widgetSlotsDirty = true;
+        this.setDirtyCanvas?.(true, true);
+      }
+      return r;
+    };
+
     const onRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
       if (this._mmxPreview?.img?.src?.startsWith("blob:")) {
@@ -107,10 +147,13 @@ app.registerExtension({
       panel.idle.style.display = "none";
       const rate = Number(d.fps);
       const src = Number(d.source_fps);
-      // when thinning slowed the playback, show both so the number is not a mystery
-      const fpsText = Number.isFinite(src) && Math.abs(src - rate) > 0.05
-        ? `${rate.toFixed(1)}fps of ${src.toFixed(0)}`
-        : `${rate.toFixed(rate % 1 ? 1 : 0)}fps`;
+      // A rate below the shot's own is not a fault, it is the "true speed" trade: the
+      // sampled frames are spread over the clip's real length. Say which of the two you
+      // are looking at, or the number reads as a setting being ignored.
+      const slowed = Number.isFinite(src) && Math.abs(src - rate) > 0.05;
+      const fpsText = slowed
+        ? `${rate.toFixed(1)}fps of ${src.toFixed(0)} · true speed`
+        : `${rate.toFixed(rate % 1 ? 1 : 0)}fps${d.playback === "source fps" ? " · source" : ""}`;
       panel.left.textContent = `step ${d.step}/${d.total_steps} · ${d.frames}f @${fpsText}`;
       // server-side cost of building this preview, not anything the browser spent
       const cost = Number(d.ms) >= 1000 ? `${(d.ms / 1000).toFixed(1)}s` : `${d.ms}ms`;

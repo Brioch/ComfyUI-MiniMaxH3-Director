@@ -320,13 +320,11 @@ def picture_texts(ordinal, picture_role, ref_role, shot_no, at):
             "note": ("%s ends on %s" % (shot, label)) if shot
                     else "The video ends on %s" % label,
         }
-    if shot:
-        return {
-            "declaration": "%s is a keyframe of %s, at %s." % (label, shot, at),
-            "where": "%s keyframe at %s" % (shot, at),
-            "phrase": "The shot's keyframe corresponds to %s." % label,
-            "note": "The keyframe of %s corresponds to %s, at %s" % (shot, label, at),
-        }
+    # The guide's fourth phrasing, "the shot's keyframe corresponds to <Picture 2>", has no
+    # image left to describe: one segment is one shot, so an image with a shot to belong to
+    # is the image that opens it, and one without a shot has no keyframe to be. It is left
+    # out rather than kept unreachable — a wording nothing can emit reads like a case the
+    # planner handles.
     return {
         "declaration": "%s is a composition anchor at %s." % (label, at),
         "where": "composition anchor at %s" % at,
@@ -363,6 +361,21 @@ def _declaration(label, written, generated):
     if text.startswith(label):
         return text if text.endswith((".", "!", "?")) else text + "."
     return "%s is %s." % (label, text.rstrip("."))
+
+
+def _audio_subject_slot(seg):
+    """Which subject slot an audio clip belongs to, 1-based, or None.
+
+    Stored on the segment by the editor. Accepts the string a <select> hands over.
+    """
+    raw = (seg or {}).get("subject")
+    if raw in (None, "", "none"):
+        return None
+    try:
+        slot = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return slot if slot > 0 else None
 
 
 def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
@@ -420,15 +433,28 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
                        "note": s.get("note", ""), "where": "", "audio": False,
                        "subject": subject_no})
 
-    # --- <Picture N>: only the real frame and storyboard anchors.
-    # Character-slot images are deliberately absent — they are cited above instead. So are
-    # images arriving on the ref_images socket: the node knows nothing about them beyond
-    # the pixels, and a vacuous "is an additional reference image" line would cost the
-    # model attention without telling it anything.
+    # --- <Picture N>: the real frame and storyboard anchors, plus any image on the
+    # ref_images socket whose `ref_image_notes` line says what it is.
+    # Character-slot images are deliberately absent — they are cited above instead. An
+    # undescribed socket image stays absent too: the node knows nothing about it beyond the
+    # pixels, and a vacuous "is an additional reference image" line would cost the model
+    # attention without telling it anything.
     for i, s in enumerate(ref_image_slots):
+        ordinal = i + 1
+        if s.get("source") == "input":
+            desc = (s.get("desc") or "").strip()
+            if not desc:
+                continue
+            label = "<Picture %d>" % ordinal
+            sentence = _declaration(label, desc, "")
+            pic_texts[ordinal] = {"declaration": sentence, "where": "", "phrase": "",
+                                  "note": sentence.rstrip(".")}
+            lines.append(sentence)
+            labels.append({"label": label, "marker": RETENTION_DEFAULT, "kind": "picture",
+                           "note": "", "where": "", "audio": False})
+            continue
         if s.get("source") != "timeline" or s.get("ref_role") == REF_ROLE_SUBJECT:
             continue
-        ordinal = i + 1
         texts = picture_texts(ordinal, s.get("picture_role"), s.get("ref_role"),
                               s.get("shot_no"), s.get("at"))
         pic_texts[ordinal] = texts
@@ -456,17 +482,31 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
     for i, seg in enumerate(ref_audio_segs):
         label = "<Audio %d>" % (i + 1)
         marker = sanitize_retention(seg.get("retention"), audio=True)
-        # the generated declaration has to agree with the marker: telling the model to
-        # follow a clip's timbre while retention_analysis says the signal is copied
-        # wholesale describes two different jobs
-        lines.append(_declaration(
-            label, seg.get("refDesc"),
-            "%s is a reference audio clip: %s"
-            % (label, "its signal is reused in the target video."
-               if marker in ("fully_copy", "partially_copy")
-               else "follow its voice and timbre.")))
+        copied = marker in ("fully_copy", "partially_copy")
+        # A clip can name the subject whose voice it carries, which is the one thing a
+        # written sentence should not have to spell out: with two voice references and no
+        # binding there is nothing in the prompt saying which voice belongs to whom
+        # (issue #10). The guide's sentence ends "<Subject 1> (S1)", but the speaker ID is
+        # not knowable here — IDs are assigned in vocal-event order, further down, and this
+        # subject may never speak at all. The label alone is unambiguous, and the ID is
+        # written where it belongs, on the line itself.
+        subject = subject_of_slot.get(_audio_subject_slot(seg))
+        if subject:
+            # the generated declaration has to agree with the marker: telling the model to
+            # follow a clip's timbre while retention_analysis says the signal is copied
+            # wholesale describes two different jobs
+            generated = ("%s carries the voice of <Subject %d>: its signal is reused in the "
+                         "target video." % (label, subject) if copied else
+                         "%s is the voice-timbre reference for <Subject %d>."
+                         % (label, subject))
+        else:
+            generated = ("%s is a reference audio clip: %s"
+                         % (label, "its signal is reused in the target video." if copied
+                            else "follow its voice and timbre."))
+        lines.append(_declaration(label, seg.get("refDesc"), generated))
         labels.append({"label": label, "kind": "audio", "audio": True, "marker": marker,
-                       "note": (seg.get("refNote") or "").strip(), "where": ""})
+                       "note": (seg.get("refNote") or "").strip(),
+                       "where": "voice of <Subject %d>" % subject if subject else ""})
 
     return lines, subject_of_slot, labels, pic_texts
 
@@ -910,7 +950,7 @@ def classify_events(events, duration_frames, fps):
 def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                   use_custom_motion=True, use_custom_audio=False, override_audio=False,
                   extra_ref_image_count=0, soundscape="", music="", prompt_format=None,
-                  summary=""):
+                  summary="", ref_image_notes=""):
     """Work out shots, keyframe roles, reference ordinals and the final prompt.
 
     Returns a dict; `execute` uses it to decide what media to load, the endpoint just
@@ -1024,10 +1064,22 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                     break
                 ref_image_slots.append({"source": "char", "slot": slot_idx, "image": img})
 
-        for _ in range(max(0, int(extra_ref_image_count))):
+        # Images arriving through the `ref_images` input used to be numbered and never
+        # described — they took a <Picture N> and the prompt said nothing about what was
+        # in them, which is the one thing the model needed. One line of `ref_image_notes`
+        # per image fills that in, in the guide's own sentence shape
+        # ("<Picture 3> is a storyboard reference for [Shot 1] …"). Blank lines are kept as
+        # placeholders so line 3 always describes the third image (issue #8).
+        #
+        # The line is kept on the slot rather than written out here, because every other
+        # declaration is built once the caps have trimmed: a note written at this point
+        # would describe a picture that may not survive to be sent.
+        notes = [n.strip() for n in (ref_image_notes or "").splitlines()]
+        for index in range(max(0, int(extra_ref_image_count))):
             if len(ref_image_slots) >= MAX_REF_IMAGES:
                 break
-            ref_image_slots.append({"source": "input"})
+            text = notes[index] if index < len(notes) else ""
+            ref_image_slots.append({"source": "input", "desc": text})
 
         # Timeline images in the order they appear on the timeline. `events` is already
         # chronological, so <Picture n> counts up with time. Character slots and the
@@ -1054,11 +1106,21 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         # reference that did not survive never had a note to prune — the old code wrote
         # the notes first and then parsed the strings back apart to drop them again.
         #
-        # `picture_role` is the timeline's own reading of the image (opening, closing or
-        # in between); `ref_role` is what the user says the image is *for*. Only an
-        # untouched `auto` image is a real keyframe: that flag is not about wording at all,
-        # it picks which frame of a video segment becomes the reference and whether it is
-        # fitted to the canvas. See minimax_director.py.
+        # `picture_role` is what the image does inside *its own shot*; `ref_role` is what
+        # the user says the image is *for*. Only an untouched `auto` image is a real
+        # keyframe: that flag is not about wording at all, it picks which frame of a video
+        # segment becomes the reference and whether it is fitted to the canvas. See
+        # minimax_director.py.
+        #
+        # The fl2va anchor roles are deliberately not consulted here. One timeline segment
+        # is one shot and the image opens it, so a picture is what its shot begins from —
+        # including the last one on the timeline, which starts the final shot rather than
+        # ending the video. Reading `last` off the fl2va classifier announced a hard cut's
+        # opening image as what the shot "ends on", and made the wording depend on whether
+        # a segment happened to finish flush with the window: three frames shorter and the
+        # same image was something else entirely. `ends on` is now reserved for a segment
+        # explicitly flagged as an end frame, the only place that intention is stated
+        # rather than inferred from geometry.
         written_shot_no = {}
         counted = 0
         for shot_i, shot in enumerate(shots):
@@ -1071,16 +1133,25 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 break
             seg = ev["seg"]
             ref_role = sanitize_ref_role(seg.get("refRole"))
+            shot_no = written_shot_no.get(ev.get("shot_index"))
+            if ev["is_end"]:
+                picture_role = ROLE_LAST
+            elif shot_no:
+                picture_role = ROLE_FIRST
+            else:
+                # no text on its own segment, so there is no [Shot N] to point at and
+                # nothing it can be said to open: it is an anchor, and stays uncropped
+                picture_role = ROLE_MIDDLE
             slot = {"source": "timeline", "event": ev, "ref_role": ref_role,
-                    "picture_role": ev["role"],
+                    "picture_role": picture_role,
                     "kind": sanitize_kind(seg.get("refKind")),
                     "retention": sanitize_retention(seg.get("retention")),
                     "desc": (seg.get("refDesc") or "").strip(),
                     "note": (seg.get("refNote") or "").strip(),
-                    "shot_no": written_shot_no.get(ev.get("shot_index")),
+                    "shot_no": shot_no,
                     "at": fmt_seconds(ev["rel_start_f"] / fps)}
-            if ref_role == REF_ROLE_AUTO and ev["role"] in (ROLE_FIRST, ROLE_LAST):
-                slot["keyframe"] = ev["role"]
+            if ref_role == REF_ROLE_AUTO and picture_role in (ROLE_FIRST, ROLE_LAST):
+                slot["keyframe"] = picture_role
             ref_image_slots.append(slot)
     else:
         # The base guide has no subject_definitions section: with references off, a subject
@@ -1337,6 +1408,23 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         if (music or "").strip():
             prompt = (prompt + "\n\nMusic: " + music.strip()).strip()
 
+    # A hand-written prompt replaces the compiled text and nothing else. Which images,
+    # videos and audio clips get loaded still comes from the timeline, because those are
+    # not opinions — the tokenizer emits <Picture i> in the order the plan decided, and a
+    # rewritten sentence cannot change that without silently renumbering everything the
+    # user just wrote. So the override is the last step, over the finished string.
+    #
+    # It is stored rather than merged on purpose. There is no honest way to fold an edit
+    # back into a recompile: dropping it when the timeline moves loses work without
+    # asking, keeping it while the timeline says otherwise is a prompt that quietly stops
+    # matching what is on screen. Storing it makes the state visible and reversible, which
+    # is the only version of this that can be explained to someone a week later.
+    compiled_prompt = prompt
+    override = (tdata.get("prompt_override") or "") if tdata.get("prompt_override_on") else ""
+    overridden = bool(override.strip())
+    if overridden:
+        prompt = override.strip()
+
     fallback = not prompt
     if fallback:
         prompt = "video"
@@ -1346,6 +1434,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
 
     return {
         "prompt": prompt, "prompt_is_fallback": fallback,
+        "prompt_overridden": overridden, "compiled_prompt": compiled_prompt,
         "shots": shots, "events": events, "retake": retake,
         "ref_mode_on": ref_mode_on, "mode": mode,
         "ref_image_slots": ref_image_slots, "ref_notes": ref_notes,

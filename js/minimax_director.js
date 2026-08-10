@@ -249,6 +249,9 @@ const STYLES = `
     display: none;
   }
   .mmxd-audio-info span { color: #fff; font-weight: 500; }
+  .mmxd-audio-subject-label { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: #aaa; }
+  .mmxd-audio-subject { background: #2a2a2a; color: #e6e6e6; border: 1px solid #444; border-radius: 4px; height: 22px; padding: 0 4px; font-size: 11px; font-family: inherit; cursor: pointer; outline: none; max-width: 260px; }
+  .mmxd-audio-subject:hover { background: #343434; border-color: #666; }
   .mmxd-controls-group {
     background: #1e1e1e;
     border: 1px solid #333;
@@ -736,6 +739,11 @@ const STYLES = `
   .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
   .mmxd-sound-area { position: absolute; top: 14px; left: 0; width: 100%; height: calc(100% - 14px); background: transparent; color: #d0d0d0; border: none; padding: 0 6px 4px 6px; resize: none; font-size: 11px; line-height: 1.35; font-family: inherit; box-sizing: border-box; outline: none; }
   .mmxd-sound-area::placeholder { color: #4a4a4a; }
+  /* --- subject-slot stepper: its own row above the slots, never inside their flow --- */
+  .mmxd-character-stepper { display: flex; align-items: center; justify-content: flex-end; gap: 4px; height: 22px; margin-top: 6px; }
+  .mmxd-character-step-btn { width: 22px; height: 22px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; background: #2a2a2a; color: #d0d0d0; border: 1px solid #444; border-radius: 4px; font-size: 14px; font-family: inherit; cursor: pointer; padding: 0; }
+  .mmxd-character-step-btn:hover { background: #383838; border-color: #666; color: #fff; }
+  .mmxd-character-step-count { font-size: 9px; color: #6a6a6a; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; min-width: 56px; text-align: center; }
 `;
 
 let styleEl = document.getElementById("minimax-h3-director-styles");
@@ -905,10 +913,18 @@ const SUBJECT_SLOT_MIN_H = 160;
 const SUBJECT_SLOT_DEFAULT_H = 215;
 const SUBJECT_SLOT_GAP = 12;
 const SUBJECT_RESIZER_H = 12;
+const SUBJECT_STEPPER_H = 26;   // the 22px buttons and the gap under them
 function subjectPanelHeight(slotCount, slotHeight) {
   const rows = Math.max(1, Math.ceil(slotCount / 3));
   const h = Math.max(SUBJECT_SLOT_MIN_H, slotHeight || SUBJECT_SLOT_DEFAULT_H);
-  return rows * h + (rows - 1) * SUBJECT_SLOT_GAP + 20 + SUBJECT_RESIZER_H;
+  return rows * h + (rows - 1) * SUBJECT_SLOT_GAP + 20 + SUBJECT_RESIZER_H
+    + SUBJECT_STEPPER_H;
+}
+
+const SUBJECT_SLOTS_DEFAULT = 3;
+function clampSubjectSlots(n) {
+  const v = parseInt(n, 10);
+  return Math.max(1, Math.min(MAX_SUBJECT_SLOTS, v > 0 ? v : SUBJECT_SLOTS_DEFAULT));
 }
 
 function emptySubjectSlot() {
@@ -969,6 +985,9 @@ function parseInitial(jsonStr) {
     // does not change what the room sounds like.
     overall_soundscape: "",
     non_diegetic_music: "",
+    // a prompt written by hand instead of compiled; off unless explicitly turned on
+    prompt_override: "",
+    prompt_override_on: false,
     mainTrackEnabled: true,
     audioTrackEnabled: true,
     motionTrackEnabled: true,
@@ -992,6 +1011,7 @@ function parseInitial(jsonStr) {
     analyzeModel: "",
     summary: "",
     task_type_override: "",
+    subjectSlotCount: SUBJECT_SLOTS_DEFAULT,
     subjects: normaliseSubjectSlots(null)
   };
   try {
@@ -1001,6 +1021,8 @@ function parseInitial(jsonStr) {
       if (p.retake_global_prompt !== undefined) parsed.retake_global_prompt = p.retake_global_prompt;
       if (p.overall_soundscape !== undefined) parsed.overall_soundscape = p.overall_soundscape;
       if (p.non_diegetic_music !== undefined) parsed.non_diegetic_music = p.non_diegetic_music;
+      if (p.prompt_override !== undefined) parsed.prompt_override = p.prompt_override;
+      if (p.prompt_override_on !== undefined) parsed.prompt_override_on = !!p.prompt_override_on;
       if (p.mainTrackEnabled !== undefined) parsed.mainTrackEnabled = p.mainTrackEnabled;
       if (p.audioTrackEnabled !== undefined) parsed.audioTrackEnabled = p.audioTrackEnabled;
       if (p.motionTrackEnabled !== undefined) parsed.motionTrackEnabled = p.motionTrackEnabled;
@@ -1027,6 +1049,13 @@ function parseInitial(jsonStr) {
       if (p.analyzeBaseUrl !== undefined) parsed.analyzeBaseUrl = p.analyzeBaseUrl;
       if (p.analyzeModel !== undefined) parsed.analyzeModel = p.analyzeModel;
       if (p.summary !== undefined) parsed.summary = p.summary || "";
+      if (p.subjectSlotCount !== undefined) {
+        parsed.subjectSlotCount = clampSubjectSlots(p.subjectSlotCount);
+      } else if (Array.isArray(p.subjects) || Array.isArray(p.characters)) {
+        // saved before the count was stored: the slots themselves are all it left behind
+        parsed.subjectSlotCount =
+          clampSubjectSlots((p.subjects || p.characters).length);
+      }
       if (p.task_type_override !== undefined) {
         parsed.task_type_override = p.task_type_override || "";
       }
@@ -1060,6 +1089,18 @@ function parseInitial(jsonStr) {
       }
     }
   } catch (e) { }
+
+  // A slot with something in it must never be hidden by the count saved beside it: the
+  // planner reads the slots, so its images would still be sent with no box on screen to
+  // show them. Only ever raises, and only here — while editing, the stepper is the one
+  // writer. It fires for a hand-edited or third-party timeline, not for one this saves.
+  let lastUsed = 0;
+  (parsed.subjects || []).forEach((s, i) => {
+    if ((s.images && s.images.length) || (s.description || "").trim()) lastUsed = i + 1;
+  });
+  if (lastUsed > parsed.subjectSlotCount) {
+    parsed.subjectSlotCount = clampSubjectSlots(lastUsed);
+  }
 
   let currentStart = 0;
   for (let seg of parsed.segments) {
@@ -6221,11 +6262,37 @@ class TimelineEditor {
       this.vidAttnValue.style.display = "none";
       this.audioInfoArea.style.display = "block";
       this.motionInfoArea.style.display = "none";
+      // Whose voice this is. The reference guide has a sentence for exactly this —
+      // "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." — and without
+      // somewhere to say it, a second voice reference is just another numbered clip with
+      // no way to tell the model who is speaking (issue #10).
+      const chars = this.subjectSlots();
+      const options = ['<option value="">— not a specific subject —</option>'].concat(
+        chars.map((c, i) => {
+          const desc = (c.description || "").trim();
+          const label = desc ? `Subject ${i + 1} — ${desc.slice(0, 40)}` : `Subject ${i + 1}`;
+          const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
+          return `<option value="${i + 1}"${sel}>${label}</option>`;
+        })).join("");
       this.audioInfoArea.innerHTML = `
         File: <span>${seg.fileName || "Unknown"}</span><br>
         Length: <span>${this.formatTime(seg.audioDurationFrames)}</span> Output Length: <span>${this.formatTime(seg.length)}</span><br>
-        Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span>
+        Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span><br>
+        <label class="mmxd-audio-subject-label">Voice of:
+          <select class="mmxd-audio-subject">${options}</select>
+        </label>
       `;
+      const subjSel = this.audioInfoArea.querySelector(".mmxd-audio-subject");
+      if (subjSel) {
+        subjSel.addEventListener("change", (e) => {
+          const target = this.timeline.audioSegments?.[this.selectedIndex];
+          if (!target) return;
+          if (e.target.value) target.subject = parseInt(e.target.value, 10);
+          else delete target.subject;
+          this.commitChanges(true);
+          if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+        });
+      }
       this.strengthValue.value = "1.00";
       this.strengthValue.disabled = true;
     } else if (this.selectionType === "motion" && seg) {
@@ -9597,8 +9664,6 @@ class TimelineEditor {
     return Math.max(SUBJECT_SLOT_MIN_H, stored || SUBJECT_SLOT_DEFAULT_H);
   }
 
-  // Three always visible, then one empty slot ahead of whatever is filled, so the panel
-  // grows only as far as it is used instead of showing nine empty boxes on day one.
   // Shown only on the ref2va path, where `summary` is a section of the prompt.
   _syncSummaryField() {
     if (!this.summaryField) return;
@@ -9606,16 +9671,12 @@ class TimelineEditor {
     this.summaryField.style.display = refsOn ? "" : "none";
   }
 
-  // A slot counts as used once it holds an image *or* a description. With refs off the
-  // image is discarded by the render, so a written subject is all a slot can ever be
-  // there — gating the panel on images alone capped that path at three empty boxes.
+  // The stepper owns this number and nothing else writes it. It used to grow on its own as
+  // slots filled, which meant the value beside the buttons moved without anyone pressing
+  // them — and `−` needed a two-stage rule to work around its own panel putting the slot
+  // straight back. One owner, one meaning.
   visibleSlotCount() {
-    const slots = this.subjectSlots();
-    let filled = 0;
-    slots.forEach((s, i) => {
-      if ((s.images && s.images.length) || (s.description || "").trim()) filled = i + 1;
-    });
-    return Math.max(3, Math.min(MAX_SUBJECT_SLOTS, filled + 1));
+    return clampSubjectSlots(this.timeline.subjectSlotCount);
   }
 
   _buildSubjectSlotEl(i) {
@@ -9674,14 +9735,65 @@ class TimelineEditor {
     container.className = "mmxd-characters-container";
 
     this.subjectSlots();
-    this.characterSlots = [];
 
+    this.characterSlots = [];
+    this._charPanelParent = parent;
+    this._charPanelContainerEl = container;
+
+    wrap.appendChild(this._buildSubjectStepper());
     wrap.appendChild(container);
     wrap.appendChild(this._buildSubjectResizer());
     parent.appendChild(wrap);
     this.charPanelContainer = container;
     this.charPanelHeight = subjectPanelHeight(3, this.subjectSlotHeight());
     this.updateCharacterSlotsUI();
+  }
+
+  // Its own row above the slots, not a flex item among them: the container wraps three
+  // slots to a line and subjectPanelHeight counts rows, so a stepper sitting in that flow
+  // would push a slot onto a line the reserved height does not know about.
+  _buildSubjectStepper() {
+    const stepper = document.createElement("div");
+    stepper.className = "mmxd-character-stepper";
+
+    const mkBtn = (label, title, onClick) => {
+      const b = document.createElement("button");
+      b.className = "mmxd-character-step-btn";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+      return b;
+    };
+    const redraw = () => {
+      this.updateCharacterSlotsUI();
+      this.commitChanges(true);
+    };
+
+    const count = document.createElement("span");
+    count.className = "mmxd-character-step-count";
+    this._charStepperRefresh = () => {
+      const n = this.visibleSlotCount();
+      count.textContent = `${n} subject${n === 1 ? "" : "s"}`;
+    };
+
+    stepper.appendChild(mkBtn("−", "One subject fewer — the last slot and its images go",
+                              () => {
+      const n = this.visibleSlotCount();
+      if (n <= 1) return;
+      // the slot goes with the count, or its images would sit in the timeline JSON with
+      // nothing on screen to show them and no way to reach them again
+      this.subjectSlots().splice(n - 1, 1);
+      this.timeline.subjectSlotCount = n - 1;
+      redraw();
+    }));
+    stepper.appendChild(count);
+    stepper.appendChild(mkBtn("+", "One subject more", () => {
+      const n = this.visibleSlotCount();
+      if (n >= MAX_SUBJECT_SLOTS) return;
+      this.timeline.subjectSlotCount = n + 1;
+      redraw();
+    }));
+    return stepper;
   }
 
   // Same grab strip as the prompt and global-prompt panels, so the reference panel resizes
@@ -9760,6 +9872,7 @@ class TimelineEditor {
       this.characterSlots.pop().remove();
     }
     this.characterSlots.forEach((el) => { el.style.height = `${slotH}px`; });
+    this._charStepperRefresh?.();
 
     // Slots wrap three to a row, so the panel's reserved height has to follow the row
     // count or the node crops the last row the moment a fourth subject is added.
@@ -9988,15 +10101,7 @@ class TimelineEditor {
           return area;
         };
 
-        const desc = makeSlotField("describes", "description",
-                                   "a woman in a red coat…", true);
-        // Typing does not redraw the panel — that would wipe the box mid-word — so a
-        // slot that has just been described claims its successor once focus leaves it.
-        desc.addEventListener("blur", () => {
-          if (this.characterSlots.length !== this.visibleSlotCount()) {
-            this.updateCharacterSlotsUI();
-          }
-        });
+        makeSlotField("describes", "description", "a woman in a red coat…", true);
 
         if (refsOn && hasImages) {
           makeSlotField("retained", "retentionNote",
@@ -10358,6 +10463,8 @@ class TimelineEditor {
       // this object is an allowlist: a key missing here is dropped on the next commit
       overall_soundscape: this.soundscapeInput ? this.soundscapeInput.value : (this.timeline.overall_soundscape || ""),
       non_diegetic_music: this.musicInput ? this.musicInput.value : (this.timeline.non_diegetic_music || ""),
+      prompt_override: this.timeline.prompt_override || "",
+      prompt_override_on: !!this.timeline.prompt_override_on,
       retakeMode: this.retakeMode,
       retakeStart: this.timeline.retakeStart,
       retakeLength: this.timeline.retakeLength,
@@ -10378,7 +10485,12 @@ class TimelineEditor {
       analyzeModel: this.timeline.analyzeModel || "",
       summary: this.timeline.summary || "",
       task_type_override: this.timeline.task_type_override || "",
-      subjects: this.subjectSlots().map(c => ({
+      // 0 means "however many the panel grew to on its own" — only the stepper writes it
+      subjectSlotCount: this.visibleSlotCount(),
+      // Only the slots that are on screen. The planner reads this array, not the count, so
+      // a slot left behind by `−` would keep sending its images with no box anywhere to
+      // show them or take them out again.
+      subjects: this.subjectSlots().slice(0, this.visibleSlotCount()).map(c => ({
         images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
         description: c.description || "",
         shortName: c.shortName || "",
@@ -11876,7 +11988,8 @@ class TimelineEditor {
         analyzeModel: this.timeline.analyzeModel || "",
         summary: this.timeline.summary || "",
         task_type_override: this.timeline.task_type_override || "",
-        subjects: this.subjectSlots().map(c => ({
+        subjectSlotCount: this.visibleSlotCount(),
+        subjects: this.subjectSlots().slice(0, this.visibleSlotCount()).map(c => ({
           images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
           description: c.description || "",
           shortName: c.shortName || "",
@@ -13534,15 +13647,101 @@ app.registerExtension({
           overflowY: "auto", fontFamily: "ui-monospace, Consolas, monospace",
         });
 
+        // --- writing the prompt by hand ---------------------------------------------
+        // The panel normally shows what the timeline compiles to. `Edit` swaps in a
+        // textarea whose contents are stored in the timeline and sent verbatim instead.
+        //
+        // Stored, not merged: there is no honest way to fold an edit back into a
+        // recompile. Discarding it when a segment moves loses work without asking; keeping
+        // it silently while the timeline says something else leaves a prompt that no
+        // longer matches the screen. So the override is explicit, marked while it is on,
+        // and `Revert` puts the compiled text back.
+        const pEdit = document.createElement("textarea");
+        pEdit.spellcheck = false;
+        pEdit.placeholder = "Write the prompt yourself. The timeline still decides which "
+          + "images, videos and audio are loaded — only the text is yours.";
+        Object.assign(pEdit.style, {
+          display: "none", margin: "0", padding: "6px", background: "#141414",
+          border: "1px solid #4a4a4a", borderRadius: "4px", color: "#e6e6e6",
+          fontSize: "11px", lineHeight: "1.4", height: "190px", resize: "none",
+          fontFamily: "ui-monospace, Consolas, monospace", boxSizing: "border-box",
+          outline: "none", width: "100%",
+        });
+
+        const mkPBtn = (label, title) => {
+          const b = document.createElement("button");
+          b.textContent = label;
+          b.title = title;
+          Object.assign(b.style, {
+            background: "#2a2a2a", color: "#d0d0d0", border: "1px solid #444",
+            borderRadius: "4px", fontSize: "9px", fontFamily: "inherit", height: "18px",
+            padding: "0 7px", cursor: "pointer", letterSpacing: "0.4px",
+          });
+          b.addEventListener("mouseenter", () => { b.style.background = "#383838"; });
+          b.addEventListener("mouseleave", () => { b.style.background = "#2a2a2a"; });
+          b.addEventListener("click", (e) => e.stopPropagation());
+          return b;
+        };
+        const pEditBtn = mkPBtn("EDIT", "Write this prompt by hand instead of compiling it");
+        const pRevertBtn = mkPBtn("REVERT", "Throw the hand-written text away and compile again");
+        pRevertBtn.style.display = "none";
+        pHead.appendChild(pEditBtn);
+        pHead.appendChild(pRevertBtn);
+
+        const tlOf = () => self._timelineEditor?.timeline;
+        const isOverridden = () => !!tlOf()?.prompt_override_on;
+
+        const applyPromptMode = () => {
+          const on = isOverridden();
+          pTitle.textContent = on ? "PROMPT (HAND-WRITTEN)" : "COMPILED PROMPT";
+          pTitle.style.color = on ? "#d8a657" : "#7a7a7a";
+          pEditBtn.style.display = on ? "none" : "inline-block";
+          pRevertBtn.style.display = on ? "inline-block" : "none";
+          pText.style.display = (pCollapsed || on) ? "none" : "block";
+          pEdit.style.display = (pCollapsed || !on) ? "none" : "block";
+        };
+        this._mmxApplyPromptMode = applyPromptMode;
+
+        pEditBtn.addEventListener("click", () => {
+          const t = tlOf();
+          if (!t) return;
+          // start from whatever is on screen, so nobody has to retype the compiled text
+          t.prompt_override = pText.textContent || "";
+          t.prompt_override_on = true;
+          pEdit.value = t.prompt_override;
+          applyPromptMode();
+          self._timelineEditor.commitChanges(true);
+          self._mmxRefreshPrompt?.();
+          pEdit.focus();
+        });
+
+        pRevertBtn.addEventListener("click", () => {
+          const t = tlOf();
+          if (!t) return;
+          t.prompt_override_on = false;
+          t.prompt_override = "";
+          applyPromptMode();
+          self._timelineEditor.commitChanges(true);
+          self._mmxRefreshPrompt?.();
+        });
+
+        pEdit.addEventListener("input", () => {
+          const t = tlOf();
+          if (!t) return;
+          t.prompt_override = pEdit.value;
+          self._timelineEditor.commitChanges(true);
+        });
+
         promptBox.appendChild(pHead);
         promptBox.appendChild(pWarn);
         promptBox.appendChild(pText);
+        promptBox.appendChild(pEdit);
 
         let pCollapsed = false;
         pHead.addEventListener("click", () => {
           pCollapsed = !pCollapsed;
           pCaret.textContent = pCollapsed ? "▸" : "▾";
-          pText.style.display = pCollapsed ? "none" : "block";
+          applyPromptMode();
           pWarn.style.display = (pCollapsed || !pWarn.textContent) ? "none" : "block";
           applyPanelHeight(true);
         });
@@ -13597,6 +13796,9 @@ app.registerExtension({
         const w = (name) => self.widgets?.find(x => x.name === name);
         const refreshPrompt = async () => {
           try {
+            const refNotes = w("ref_image_notes")?.value || "";
+            const refTrimmed = refNotes.replace(/\s+$/, "");
+            const refNoteCount = refTrimmed ? refTrimmed.split("\n").length : 0;
             const body = {
               timeline_data: w("timeline_data")?.value || "",
               start_frame: w("start_frame")?.value || 0,
@@ -13606,10 +13808,17 @@ app.registerExtension({
               use_custom_audio: !!w("use_custom_audio")?.value,
               override_audio: !!w("override_audio")?.value,
               global_prompt: self.properties?.global_prompt || "",
-              // Whether anything is wired to ref_images, not how many images it carries:
-              // that is an upstream tensor's batch size and nothing here can know it
-              // before the graph runs. The endpoint turns this into a caveat on the
-              // preview rather than a count it would have to invent.
+              // a widget, so the panel must ship it or it would show pictures the node
+              // describes and the preview does not
+              ref_image_notes: refNotes,
+              // How many images are on the ref_images wire is not knowable here — it is a
+              // tensor that only exists once the graph runs. The described ones are, so
+              // the panel previews those. Wire more than you describe and the node will
+              // number more than the panel shows; describe them and the two agree.
+              extra_ref_image_count: refNoteCount,
+              // Which is why the wire's own state goes too: with nothing described there
+              // is no count to preview at all, and the endpoint turns that into a caveat
+              // rather than showing <Picture 2> where the render will send <Picture 5>.
               ref_images_connected:
                 self.inputs?.find(i => i.name === "ref_images")?.link != null,
             };
@@ -13619,6 +13828,13 @@ app.registerExtension({
             const d = await resp.json();
             if (d.status !== "success") throw new Error(d.message || "compile failed");
             pText.textContent = d.prompt || "";
+            // Keep the textarea in step with what is stored, but never while it has the
+            // caret — clobbering someone's sentence mid-word is unforgivable.
+            if (d.overridden && document.activeElement !== pEdit
+                && pEdit.value !== (d.prompt || "")) {
+              pEdit.value = d.prompt || "";
+            }
+            self._mmxApplyPromptMode?.();
             // The word count is information, not a verdict: the guide suggests 350-500 for
             // generation tasks, which is a lot for a 5-15s clip, so it sits in the badge
             // where it can be glanced at rather than in the warnings where it would fire
@@ -13780,6 +13996,21 @@ app.registerExtension({
         for (const [name, def] of APPENDED_WIDGET_DEFAULTS) {
           const w = this.widgets.find(x => x.name === name);
           if (w && (w.value == null || w.value === "")) w.value = def;
+        }
+
+        // A widget added since this workflow was saved takes a row the saved height never
+        // allowed for, and the DOM panels below it will not shrink past their floors — so
+        // the timeline and the prompt preview end up hanging out of the node body. A fresh
+        // node sits exactly on computeSize(), which means every older workflow is short by
+        // whatever the new widget occupies; ref_image_notes is 66px of textarea. Grow to
+        // the minimum, never shrink: anything above it is the user's own sizing.
+        const minHeight = this.computeSize()[1];
+        if (this.size[1] < minHeight) {
+          this.size[1] = minHeight;
+          // the draw loop only re-arranges widgets for nodes carrying this flag; without
+          // it the body redraws taller while the overlays keep their old positions
+          this._widgetSlotsDirty = true;
+          this.setDirtyCanvas?.(true, true);
         }
 
         setTimeout(() => {

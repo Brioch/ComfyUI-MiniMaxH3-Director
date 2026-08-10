@@ -12,8 +12,8 @@ than that, and two of its sections were structurally missing from the output.
   "people, animals, or objects; scenes, backgrounds, or environments; clothing, props,
   interfaces, or visual effects; styles, actions, expressions, or poses". Each slot now
   carries a **kind** that supplies the noun when no description is written, so a slot can
-  hold a location or a look instead of a face. The panel grows from three slots to nine as
-  you fill it, and `@ref1` … `@ref9` address them. `@char1` … `@char3` still resolve.
+  hold a location or a look instead of a face. The panel goes from three slots to nine,
+  and `@ref1` … `@ref9` address them. `@char1` … `@char3` still resolve.
 
 - **A subject no longer has to have an image**, which is what made subjects unreachable on
   the **Refs OFF (fl2va)** path: the slot's text boxes only appeared once something had
@@ -86,8 +86,8 @@ than that, and two of its sections were structurally missing from the output.
 - **Both sentences about a reference are yours to write.** The guide's lines name actual
   features rather than stock phrases — `fully_preserved - the Samoyed's thick white fur,
   pointed ears, dark nose, and curved tail are retained` — and name relationships the
-  timeline cannot work out, like `<Audio 1> is the voice-timbre reference for <Subject 1>
-  (S1)`. Every reference therefore has up to two boxes, one per section it feeds:
+  timeline cannot work out, like `<Video 1> is the source video for the target video edit`.
+  Every reference therefore has up to two boxes, one per section it feeds:
 
   | Box | Becomes |
   |---|---|
@@ -250,6 +250,61 @@ than that, and two of its sections were structurally missing from the output.
   there is nothing to prune — and the per-type caps made that path unreachable anyway
   (`images + videos` is at most 12 on its own, so the audio bucket always absorbs the
   excess).
+
+## 0.1.6
+
+- **The compiled prompt can be written by hand.** `EDIT` on the prompt panel turns it into
+  a textarea, prefilled with what the timeline just compiled; `REVERT` throws the edit away
+  and compiles again. Only the text is replaced — which images, videos and audio clips get
+  loaded still comes from the timeline, because the tokenizer emits `<Picture i>` in the
+  order the plan decided and a rewritten sentence cannot renumber that. The edit is stored
+  rather than merged: discarding it when a segment moves would lose work without asking,
+  and keeping it silently would leave a prompt that no longer matches the screen
+  ([#4](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/4)).
+- **A timeline picture opens its shot rather than ending the video**
+  ([#4](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/4)). On a hard
+  cut the second image starts shot 2; 0.1.5 read the fl2va anchor roles and announced it as
+  what the shot "ends on". `ends on` is now reserved for a segment explicitly flagged as an
+  end frame, which is the only place that intention is stated rather than inferred from
+  geometry. Also from #4: `Keep the identity, face and clothing of …` is now `appearance`,
+  since a subject slot holds whatever was put in it and only some of those wear anything.
+- **The preview's playback rate is a choice, not a decision made for you.** `true speed`
+  (the default, unchanged) spreads the sampled frames across the shot's real duration, so
+  the preview lasts as long as the finished clip — with `latent2rgb` that caps at
+  `preview_fps / 3.35`, because there is one image per latent frame and H3 compresses time
+  by that much. `source fps` plays them at the shot's own rate the way ComfyUI's preview
+  does: motion reads normally, the clip ends early. Measured on a 124-frame shot: 4.65 fps
+  against 24.0.
+- **Subject slots are a number you choose**, 1 to 9, still 3 on a fresh node
+  ([#8](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/8)). Three was
+  hardcoded in four places and came from nowhere in particular; the model card caps
+  reference images at nine and each slot holds two. `@char4` and beyond resolve now.
+- **Images on the `ref_images` wire can be described.** One line of `ref_image_notes` per
+  image, emitted in the guide's own shape (`<Picture 3> is a storyboard reference for …`).
+  Blank lines are kept as placeholders so line 3 always belongs to the third image. Before
+  this they were numbered and the prompt said nothing about what was in them
+  ([#8](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/8)).
+- **An audio reference can say whose voice it is**
+  ([#10](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/10)). Pick a
+  subject on the clip and the prompt uses the reference guide's own sentence, `<Audio 1> is
+  the voice-timbre reference for <Subject 1>.` With more than one subject there was
+  previously no way to say which voice belonged to whom. Unassigned clips keep the old
+  wording. (The guide ends that line with a speaker ID, `(S1)`; this does not write one,
+  since IDs are assigned in the order voices are heard and the subject may never speak.)
+- **`unload_after` reaches llama.cpp**, not just Ollama
+  ([#9](https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/9)).
+  llama-server in router mode has `POST /models/unload`; a plain one does not, and the log
+  now names `--sleep-idle-seconds` instead of leaving a checkbox that quietly does nothing.
+- **A canvas too small to encode is refused by name.** Under 32px per side the video latent
+  loses an edge and ComfyUI dies six frames deep with a bare `float division by zero`.
+  Reachable from the widgets: `custom_width=4` with `divisible_by=1` was enough. Not the
+  cause of the crash reported in #4, which is still open.
+- Fixed: adding a widget shifted every saved value after it, so `playback` first landed on
+  `webp_quality` and blocked the node with *"The value 80 is not available"*. New widgets go
+  last now, a combo whose saved value is not among its options falls back to the default
+  with a warning instead of blocking, and both nodes grow to their minimum height on load so
+  the panels below a new widget cannot end up hanging outside the node body.
+- `CONTRIBUTING.md`, and `test_plan.py` is up to 123 offline checks.
 
 ## 0.1.5
 
