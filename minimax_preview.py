@@ -41,6 +41,9 @@ log = logging.getLogger(__name__)
 EVENT = "minimax_h3_preview"
 DECODE_FAST = "latent2rgb (fast)"
 DECODE_VAE = "vae (quality)"
+PLAYBACK_TRUE = "true speed"
+PLAYBACK_SOURCE = "source fps"
+MODEL_FPS = 24.0            # H3's native output rate
 TARGET_NODE = "node"
 TARGET_SAMPLER = "sampler (VHS)"
 TARGET_BOTH = "both"
@@ -209,7 +212,7 @@ class _VHSStreamer:
 class _OuterSampleWrapper:
     def __init__(self, node_id, decode_mode, vae, max_resolution, preview_frames,
                  preview_fps, webp_quality, every_n_steps, suppress_default, target,
-                 max_overhead=25):
+                 max_overhead=25, playback=None):
         self.node_id = node_id
         self.decode_mode = decode_mode
         self.vae = vae
@@ -221,12 +224,33 @@ class _OuterSampleWrapper:
         self.suppress_default = bool(suppress_default)
         self.target = target
         self.max_overhead = max(0, min(100, int(max_overhead)))
+        self.playback = playback or PLAYBACK_TRUE
+
+    def _rate_for(self, shown, pixel_frames):
+        """Frames per second to play `shown` images at.
+
+        Two honest answers, and the node used to pick one for you:
+
+        `true speed` spreads the images across the shot's real duration, so the preview
+        lasts as long as the finished clip. With latent2rgb that caps out at
+        preview_fps / 3.35 — one image per latent frame, and H3 compresses time by that
+        much — which looks like a setting being ignored if nobody says so.
+
+        `source fps` plays them at preview_fps flat. That is what ComfyUI's own preview and
+        the other packs do, and it is why they show a round 24: the motion reads at normal
+        speed but the clip is over in a third of the time. Useful for judging movement,
+        misleading about timing.
+        """
+        if self.playback == PLAYBACK_SOURCE:
+            return max(0.1, self.preview_fps)
+        return max(0.1, self.preview_fps * shown / max(1, pixel_frames))
 
     def _send_to_node(self, b64, n_frames, step, total_steps, ms, rate):
         server.PromptServer.instance.send_sync(EVENT, {
             "node_id": self.node_id, "webp": b64, "frames": n_frames,
             "fps": round(float(rate), 2), "source_fps": round(float(self.preview_fps), 2),
             "step": step, "total_steps": total_steps, "ms": ms, "mode": self.decode_mode,
+            "playback": self.playback,
         })
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas, denoise_mask,
@@ -254,7 +278,7 @@ class _OuterSampleWrapper:
 
         original_cb = callback
         state = {"warned": False, "sent": 0, "cost": 0.0, "finished": 0.0, "anim": 0.0,
-                 "throttle_logged": False}
+                 "throttle_logged": False, "cap_logged": False}
         log.info("[MiniMaxDirector] preview: %s, target=%s, <=%d frames @%d fps, max %dpx.",
                  self.decode_mode, self.target, self.preview_frames, self.preview_fps,
                  self.max_resolution)
@@ -286,7 +310,22 @@ class _OuterSampleWrapper:
                         # frames we ended up with across exactly that long. Counting them
                         # after the decode matters: latent2rgb yields one image per latent
                         # frame, the VAE expands each latent frame into ~3.35 of them.
-                        rate = max(0.1, self.preview_fps * len(frames) / max(1, pixel_frames))
+                        rate = self._rate_for(len(frames), pixel_frames)
+                        if not state["cap_logged"] and self.playback == PLAYBACK_TRUE \
+                                and rate < self.preview_fps - 0.05:
+                            state["cap_logged"] = True
+                            log.info("[MiniMaxDirector] preview plays at %.1f fps, not %.0f: "
+                                     "%d frame(s) spread over the shot's %.2fs so it lasts as "
+                                     "long as the finished clip. %s Switch playback to '%s' to "
+                                     "play them at %.0f fps instead — the motion reads normally, "
+                                     "the clip ends early.",
+                                     rate, self.preview_fps, len(frames),
+                                     pixel_frames / MODEL_FPS,
+                                     "latent2rgb has one image per latent frame, so it cannot "
+                                     "exceed %.1f fps here." % (self.preview_fps * 5.0 / 17.0)
+                                     if self.decode_mode != DECODE_VAE else
+                                     "Raising preview_frames raises it.",
+                                     PLAYBACK_SOURCE, self.preview_fps)
                         if to_node:
                             b64 = _encode_animated_webp(frames, rate, self.webp_quality)
                             if b64:
@@ -358,10 +397,22 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
                              tooltip="How many frames of the shot to show. Frames are thinned evenly, "
                                      "so this caps the cost without cropping the timeline."),
                 io.Float.Input("preview_fps", default=24.0, min=1.0, max=60.0, step=1.0,
-                               tooltip="Playback rate of the shot. FLOAT so the Director's "
-                                       "'fps' output can be wired straight in. When "
-                                       "preview_frames thins the shot down, the preview is "
-                                       "slowed to match, so it always plays at real speed."),
+                               tooltip="The shot's own frame rate — 24 for H3. FLOAT so the "
+                                       "Director's 'fps' output can be wired straight in. "
+                                       "Whether the preview actually plays at this rate "
+                                       "depends on 'playback'; with 'true speed' it is a "
+                                       "ceiling, not a promise."),
+                io.Combo.Input("playback", options=[PLAYBACK_TRUE, PLAYBACK_SOURCE],
+                               default=PLAYBACK_TRUE, optional=True,
+                               tooltip="'true speed' spreads the sampled frames across the "
+                                       "shot's real duration, so the preview lasts exactly as "
+                                       "long as the finished clip — but with latent2rgb that "
+                                       "caps at preview_fps / 3.35, because there is one image "
+                                       "per latent frame and H3 compresses time by that much. "
+                                       "'source fps' plays them at preview_fps flat, like "
+                                       "ComfyUI's own preview: motion reads at normal speed, "
+                                       "the clip ends early. Judge timing with the first, "
+                                       "movement with the second."),
                 io.Int.Input("webp_quality", default=80, min=1, max=100, step=1, optional=True,
                              tooltip="WebP quality of the animation sent to the node."),
                 io.Int.Input("every_n_steps", default=1, min=1, max=50, step=1, optional=True,
@@ -380,8 +431,8 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
 
     @classmethod
     def execute(cls, model, decode=DECODE_FAST, preview_target=TARGET_NODE, max_resolution=512,
-                preview_frames=24, preview_fps=24.0, webp_quality=80, every_n_steps=1,
-                max_preview_overhead=25, suppress_default_preview=True,
+                preview_frames=24, preview_fps=24.0, playback=PLAYBACK_TRUE, webp_quality=80,
+                every_n_steps=1, max_preview_overhead=25, suppress_default_preview=True,
                 vae=None) -> io.NodeOutput:
         if decode == DECODE_VAE and vae is None:
             raise ValueError(
@@ -394,7 +445,7 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
         wrapper = _OuterSampleWrapper(
             str(cls.hidden.unique_id), decode, vae, max_resolution, preview_frames,
             preview_fps, webp_quality, every_n_steps, suppress_default_preview,
-            preview_target, max_preview_overhead)
+            preview_target, max_preview_overhead, playback)
 
         # Register where the sampler actually looks: CFGGuider reads
         #   get_all_wrappers(OUTER_SAMPLE, self.model_options, is_model_options=True)

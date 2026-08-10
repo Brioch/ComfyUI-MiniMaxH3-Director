@@ -107,10 +107,13 @@ app.registerExtension({
       panel.idle.style.display = "none";
       const rate = Number(d.fps);
       const src = Number(d.source_fps);
-      // when thinning slowed the playback, show both so the number is not a mystery
-      const fpsText = Number.isFinite(src) && Math.abs(src - rate) > 0.05
-        ? `${rate.toFixed(1)}fps of ${src.toFixed(0)}`
-        : `${rate.toFixed(rate % 1 ? 1 : 0)}fps`;
+      // A rate below the shot's own is not a fault, it is the "true speed" trade: the
+      // sampled frames are spread over the clip's real length. Say which of the two you
+      // are looking at, or the number reads as a setting being ignored.
+      const slowed = Number.isFinite(src) && Math.abs(src - rate) > 0.05;
+      const fpsText = slowed
+        ? `${rate.toFixed(1)}fps of ${src.toFixed(0)} · true speed`
+        : `${rate.toFixed(rate % 1 ? 1 : 0)}fps${d.playback === "source fps" ? " · source" : ""}`;
       panel.left.textContent = `step ${d.step}/${d.total_steps} · ${d.frames}f @${fpsText}`;
       // server-side cost of building this preview, not anything the browser spent
       const cost = Number(d.ms) >= 1000 ? `${(d.ms / 1000).toFixed(1)}s` : `${d.ms}ms`;
