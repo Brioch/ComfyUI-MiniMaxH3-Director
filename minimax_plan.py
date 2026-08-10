@@ -668,6 +668,23 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         if (music or "").strip():
             prompt = (prompt + "\n\nMusic: " + music.strip()).strip()
 
+    # A hand-written prompt replaces the compiled text and nothing else. Which images,
+    # videos and audio clips get loaded still comes from the timeline, because those are
+    # not opinions — the tokenizer emits <Picture i> in the order the plan decided, and a
+    # rewritten sentence cannot change that without silently renumbering everything the
+    # user just wrote. So the override is the last step, over the finished string.
+    #
+    # It is stored rather than merged on purpose. There is no honest way to fold an edit
+    # back into a recompile: dropping it when the timeline moves loses work without
+    # asking, keeping it while the timeline says otherwise is a prompt that quietly stops
+    # matching what is on screen. Storing it makes the state visible and reversible, which
+    # is the only version of this that can be explained to someone a week later.
+    compiled_prompt = prompt
+    override = (tdata.get("prompt_override") or "") if tdata.get("prompt_override_on") else ""
+    overridden = bool(override.strip())
+    if overridden:
+        prompt = override.strip()
+
     fallback = not prompt
     if fallback:
         prompt = "video"
@@ -677,6 +694,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
 
     return {
         "prompt": prompt, "prompt_is_fallback": fallback,
+        "prompt_overridden": overridden, "compiled_prompt": compiled_prompt,
         "shots": shots, "events": events, "retake": retake,
         "ref_mode_on": ref_mode_on, "mode": mode,
         "ref_image_slots": ref_image_slots, "ref_notes": ref_notes,

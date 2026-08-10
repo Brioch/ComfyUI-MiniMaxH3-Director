@@ -225,6 +225,9 @@ async def compile_prompt_endpoint(request):
         )
 
         warnings = []
+        if p.get("prompt_overridden"):
+            warnings.append("This prompt is hand-written. Timeline edits no longer change "
+                            "it — they still decide which references are loaded.")
         if p["prompt_is_fallback"]:
             warnings.append("No prompt text on the timeline — 'video' would be sent.")
         if p["length"] > plan.TRAINED_MAX_FRAMES:
@@ -250,6 +253,10 @@ async def compile_prompt_endpoint(request):
             "refs": {"images": len(p["ref_image_slots"]),
                      "videos": len(p["ref_video_segs"]),
                      "audios": len(p["ref_audio_segs"])},
+            "overridden": bool(p.get("prompt_overridden")),
+            # what the timeline would produce, so the panel can offer it back without
+            # having to recompile behind the user's back
+            "compiled": p.get("compiled_prompt", p["prompt"]),
             "warnings": warnings,
         })
     except Exception as e:

@@ -839,6 +839,9 @@ function parseInitial(jsonStr) {
     // does not change what the room sounds like.
     overall_soundscape: "",
     non_diegetic_music: "",
+    // a prompt written by hand instead of compiled; off unless explicitly turned on
+    prompt_override: "",
+    prompt_override_on: false,
     mainTrackEnabled: true,
     audioTrackEnabled: true,
     motionTrackEnabled: true,
@@ -873,6 +876,8 @@ function parseInitial(jsonStr) {
       if (p.retake_global_prompt !== undefined) parsed.retake_global_prompt = p.retake_global_prompt;
       if (p.overall_soundscape !== undefined) parsed.overall_soundscape = p.overall_soundscape;
       if (p.non_diegetic_music !== undefined) parsed.non_diegetic_music = p.non_diegetic_music;
+      if (p.prompt_override !== undefined) parsed.prompt_override = p.prompt_override;
+      if (p.prompt_override_on !== undefined) parsed.prompt_override_on = !!p.prompt_override_on;
       if (p.mainTrackEnabled !== undefined) parsed.mainTrackEnabled = p.mainTrackEnabled;
       if (p.audioTrackEnabled !== undefined) parsed.audioTrackEnabled = p.audioTrackEnabled;
       if (p.motionTrackEnabled !== undefined) parsed.motionTrackEnabled = p.motionTrackEnabled;
@@ -9797,6 +9802,8 @@ class TimelineEditor {
       // this object is an allowlist: a key missing here is dropped on the next commit
       overall_soundscape: this.soundscapeInput ? this.soundscapeInput.value : (this.timeline.overall_soundscape || ""),
       non_diegetic_music: this.musicInput ? this.musicInput.value : (this.timeline.non_diegetic_music || ""),
+      prompt_override: this.timeline.prompt_override || "",
+      prompt_override_on: !!this.timeline.prompt_override_on,
       retakeMode: this.retakeMode,
       retakeStart: this.timeline.retakeStart,
       retakeLength: this.timeline.retakeLength,
@@ -12944,15 +12951,101 @@ app.registerExtension({
           overflowY: "auto", fontFamily: "ui-monospace, Consolas, monospace",
         });
 
+        // --- writing the prompt by hand ---------------------------------------------
+        // The panel normally shows what the timeline compiles to. `Edit` swaps in a
+        // textarea whose contents are stored in the timeline and sent verbatim instead.
+        //
+        // Stored, not merged: there is no honest way to fold an edit back into a
+        // recompile. Discarding it when a segment moves loses work without asking; keeping
+        // it silently while the timeline says something else leaves a prompt that no
+        // longer matches the screen. So the override is explicit, marked while it is on,
+        // and `Revert` puts the compiled text back.
+        const pEdit = document.createElement("textarea");
+        pEdit.spellcheck = false;
+        pEdit.placeholder = "Write the prompt yourself. The timeline still decides which "
+          + "images, videos and audio are loaded — only the text is yours.";
+        Object.assign(pEdit.style, {
+          display: "none", margin: "0", padding: "6px", background: "#141414",
+          border: "1px solid #4a4a4a", borderRadius: "4px", color: "#e6e6e6",
+          fontSize: "11px", lineHeight: "1.4", height: "190px", resize: "none",
+          fontFamily: "ui-monospace, Consolas, monospace", boxSizing: "border-box",
+          outline: "none", width: "100%",
+        });
+
+        const mkPBtn = (label, title) => {
+          const b = document.createElement("button");
+          b.textContent = label;
+          b.title = title;
+          Object.assign(b.style, {
+            background: "#2a2a2a", color: "#d0d0d0", border: "1px solid #444",
+            borderRadius: "4px", fontSize: "9px", fontFamily: "inherit", height: "18px",
+            padding: "0 7px", cursor: "pointer", letterSpacing: "0.4px",
+          });
+          b.addEventListener("mouseenter", () => { b.style.background = "#383838"; });
+          b.addEventListener("mouseleave", () => { b.style.background = "#2a2a2a"; });
+          b.addEventListener("click", (e) => e.stopPropagation());
+          return b;
+        };
+        const pEditBtn = mkPBtn("EDIT", "Write this prompt by hand instead of compiling it");
+        const pRevertBtn = mkPBtn("REVERT", "Throw the hand-written text away and compile again");
+        pRevertBtn.style.display = "none";
+        pHead.appendChild(pEditBtn);
+        pHead.appendChild(pRevertBtn);
+
+        const tlOf = () => self._timelineEditor?.timeline;
+        const isOverridden = () => !!tlOf()?.prompt_override_on;
+
+        const applyPromptMode = () => {
+          const on = isOverridden();
+          pTitle.textContent = on ? "PROMPT (HAND-WRITTEN)" : "COMPILED PROMPT";
+          pTitle.style.color = on ? "#d8a657" : "#7a7a7a";
+          pEditBtn.style.display = on ? "none" : "inline-block";
+          pRevertBtn.style.display = on ? "inline-block" : "none";
+          pText.style.display = (pCollapsed || on) ? "none" : "block";
+          pEdit.style.display = (pCollapsed || !on) ? "none" : "block";
+        };
+        this._mmxApplyPromptMode = applyPromptMode;
+
+        pEditBtn.addEventListener("click", () => {
+          const t = tlOf();
+          if (!t) return;
+          // start from whatever is on screen, so nobody has to retype the compiled text
+          t.prompt_override = pText.textContent || "";
+          t.prompt_override_on = true;
+          pEdit.value = t.prompt_override;
+          applyPromptMode();
+          self._timelineEditor.commitChanges(true);
+          self._mmxRefreshPrompt?.();
+          pEdit.focus();
+        });
+
+        pRevertBtn.addEventListener("click", () => {
+          const t = tlOf();
+          if (!t) return;
+          t.prompt_override_on = false;
+          t.prompt_override = "";
+          applyPromptMode();
+          self._timelineEditor.commitChanges(true);
+          self._mmxRefreshPrompt?.();
+        });
+
+        pEdit.addEventListener("input", () => {
+          const t = tlOf();
+          if (!t) return;
+          t.prompt_override = pEdit.value;
+          self._timelineEditor.commitChanges(true);
+        });
+
         promptBox.appendChild(pHead);
         promptBox.appendChild(pWarn);
         promptBox.appendChild(pText);
+        promptBox.appendChild(pEdit);
 
         let pCollapsed = false;
         pHead.addEventListener("click", () => {
           pCollapsed = !pCollapsed;
           pCaret.textContent = pCollapsed ? "▸" : "▾";
-          pText.style.display = pCollapsed ? "none" : "block";
+          applyPromptMode();
           pWarn.style.display = (pCollapsed || !pWarn.textContent) ? "none" : "block";
           applyPanelHeight(true);
         });
@@ -13034,6 +13127,13 @@ app.registerExtension({
             const d = await resp.json();
             if (d.status !== "success") throw new Error(d.message || "compile failed");
             pText.textContent = d.prompt || "";
+            // Keep the textarea in step with what is stored, but never while it has the
+            // caret — clobbering someone's sentence mid-word is unforgivable.
+            if (d.overridden && document.activeElement !== pEdit
+                && pEdit.value !== (d.prompt || "")) {
+              pEdit.value = d.prompt || "";
+            }
+            self._mmxApplyPromptMode?.();
             pBadge.textContent = `${d.mode} · ${d.format || ""} · ${d.shots} shot${d.shots === 1 ? "" : "s"} · `
               + `${d.length}f / ${d.seconds}s · refs ${d.refs.images}i/${d.refs.videos}v/${d.refs.audios}a`;
             pWarn.textContent = (d.warnings || []).join("  •  ");

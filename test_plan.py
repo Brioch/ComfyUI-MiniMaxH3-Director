@@ -365,6 +365,43 @@ check("a clip pointing at a slot with no images binds nothing",
                  characters=two_chars, audioSegments=[audio(subject=3)]),
               use_custom_audio=True)["prompt"], False)
 
+# ------------------------------------------- a hand-written prompt replaces the text
+base_tl = tl([img(0, 144, "a.png", prompt="she enters"),
+              img(144, 141, "b.png", prompt="she arrives")], ref_mode="ON",
+             characters=chars)
+compiled = compile(base_tl)
+
+over_tl = tl([img(0, 144, "a.png", prompt="she enters"),
+              img(144, 141, "b.png", prompt="she arrives")], ref_mode="ON",
+             characters=chars, prompt_override_on=True,
+             prompt_override="  A single hand-written line.  ")
+over = compile(over_tl)
+
+check("the override replaces the prompt", over["prompt"], "A single hand-written line.")
+check("and is reported as such", over["prompt_overridden"], True)
+check("what the timeline would have produced is still available",
+      over["compiled_prompt"], compiled["prompt"])
+check("the references are still the timeline's, not the text's",
+      [s.get("source") for s in over["ref_image_slots"]],
+      [s.get("source") for s in compiled["ref_image_slots"]])
+check("shots and length are untouched by the override",
+      (len(over["shots"]), over["length"]), (len(compiled["shots"]), compiled["length"]))
+check("an override is not a fallback", over["prompt_overridden"] and
+      not over["prompt_is_fallback"], True)
+
+check("stored but switched off changes nothing",
+      compile(tl([img(0, 144, "a.png", prompt="she enters")], ref_mode="ON",
+                 characters=chars, prompt_override="ignored me"))["prompt_overridden"],
+      False)
+check("switched on but empty falls back to the compiled text",
+      compile(tl([img(0, 144, "a.png", prompt="she enters")], ref_mode="ON",
+                 characters=chars, prompt_override_on=True,
+                 prompt_override="   "))["prompt_overridden"], False)
+check("an override works in the comfyui format too",
+      compile(tl([img(0, 144, "a.png", prompt="x")], ref_mode="ON",
+                 prompt_format="comfyui", prompt_override_on=True,
+                 prompt_override="plain text"))["prompt"], "plain text")
+
 # ---------------------------------------------------------------- comfyui format
 cf = compile(tl([img(0, 144, "a.png"), img(144, 141, "b.png")], ref_mode="ON",
                 prompt_format="comfyui"))
