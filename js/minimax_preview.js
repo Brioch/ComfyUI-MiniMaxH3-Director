@@ -84,6 +84,31 @@ app.registerExtension({
       if (this.size[1] < 520) this.size[1] = 520;
     };
 
+    // Heal combo widgets whose saved value is not one of their options.
+    //
+    // ComfyUI stores widgets_values positionally, so a workflow saved while the widget
+    // list had a different shape hands every value after the change to the wrong input —
+    // and a combo then refuses to run with "The value true is not available". The values
+    // themselves are unrecoverable at that point; what matters is that the node comes back
+    // usable instead of blocking the whole workflow. Same idea as js/minimax_titles.js
+    // healing stale titles.
+    const onConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function (info) {
+      const r = onConfigure?.apply(this, arguments);
+      for (const w of this.widgets || []) {
+        const opts = w.options?.values;
+        if (!Array.isArray(opts) || opts.length === 0) continue;
+        if (opts.includes(w.value)) continue;
+        const fallback = w.options?.default ?? opts[0];
+        console.warn(
+          `[MiniMaxDirector] ${NODE_TYPE}: saved value ${JSON.stringify(w.value)} is not a ` +
+          `valid '${w.name}' — this workflow was saved against a different widget layout. ` +
+          `Falling back to ${JSON.stringify(fallback)}; check the node's settings.`);
+        w.value = fallback;
+      }
+      return r;
+    };
+
     const onRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
       if (this._mmxPreview?.img?.src?.startsWith("blob:")) {

@@ -402,17 +402,6 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
                                        "Whether the preview actually plays at this rate "
                                        "depends on 'playback'; with 'true speed' it is a "
                                        "ceiling, not a promise."),
-                io.Combo.Input("playback", options=[PLAYBACK_TRUE, PLAYBACK_SOURCE],
-                               default=PLAYBACK_TRUE, optional=True,
-                               tooltip="'true speed' spreads the sampled frames across the "
-                                       "shot's real duration, so the preview lasts exactly as "
-                                       "long as the finished clip — but with latent2rgb that "
-                                       "caps at preview_fps / 3.35, because there is one image "
-                                       "per latent frame and H3 compresses time by that much. "
-                                       "'source fps' plays them at preview_fps flat, like "
-                                       "ComfyUI's own preview: motion reads at normal speed, "
-                                       "the clip ends early. Judge timing with the first, "
-                                       "movement with the second."),
                 io.Int.Input("webp_quality", default=80, min=1, max=100, step=1, optional=True,
                              tooltip="WebP quality of the animation sent to the node."),
                 io.Int.Input("every_n_steps", default=1, min=1, max=50, step=1, optional=True,
@@ -424,6 +413,21 @@ class MiniMaxH3PreviewOverride(io.ComfyNode):
                                      "stalling the run. 0 disables the cap."),
                 io.Boolean.Input("suppress_default_preview", default=True, optional=True,
                                  tooltip="Hide ComfyUI's built-in single-frame preview while this runs."),
+                # NEW WIDGETS GO LAST. ComfyUI serialises widget values positionally, so
+                # inserting one in the middle shifts every value after it in workflows that
+                # were saved before it existed — this one first landed between preview_fps
+                # and webp_quality and handed a saved 80 to a combo that has no such option.
+                io.Combo.Input("playback", options=[PLAYBACK_TRUE, PLAYBACK_SOURCE],
+                               default=PLAYBACK_TRUE, optional=True,
+                               tooltip="'true speed' spreads the sampled frames across the "
+                                       "shot's real duration, so the preview lasts exactly as "
+                                       "long as the finished clip — but with latent2rgb that "
+                                       "caps at preview_fps / 3.35, because there is one image "
+                                       "per latent frame and H3 compresses time by that much. "
+                                       "'source fps' plays them at preview_fps flat, like "
+                                       "ComfyUI's own preview: motion reads at normal speed, "
+                                       "the clip ends early. Judge timing with the first, "
+                                       "movement with the second."),
             ],
             outputs=[io.Model.Output(tooltip="Model with the preview attached.")],
             hidden=[io.Hidden.unique_id],
