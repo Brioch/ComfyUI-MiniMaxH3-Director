@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.1.5-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.6-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -30,6 +30,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [Quick start](#quick-start)
 - [The timeline](#the-timeline)
 - [Prompt format](#prompt-format)
+- [Writing it yourself](#writing-it-yourself)
 - [Live preview while sampling](#live-preview-while-sampling)
 - [Writing the prompt for you](#writing-the-prompt-for-you)
 - [Retake Mode](#retake-mode)
@@ -43,6 +44,10 @@ see the exact prompt the model will receive while you are still editing it.
 ---
 
 ## News
+
+**0.1.6** · 2026-08-10 — the compiled prompt can be written by hand and reverted, subject
+slots go from 1 to 9, an audio clip can name whose voice it is, and the live preview lets
+you choose between true speed and the shot's own frame rate.
 
 **0.1.5** · 2026-08-06 — picture notes in `Refs ON` now use the reference guide's own
 phrasing for frame anchors: `[Shot 1] begins from <Picture 1>`, `ends on`, and
@@ -259,6 +264,15 @@ Drop a face or a full-body shot into `@char1` … `@char3` and write `@char1` in
 it expands to `<Subject 1>` (MiniMax notation) or `<Picture 1>` (ComfyUI notation) and the
 image is attached as a reference. This is the **Refs ON (ref2va)** path.
 
+**How many slots is up to you** — the stepper next to them goes from 1 to 9, starting at 3.
+Each slot holds two images, and H3 takes nine reference images in total, so nine slots is
+where it stops being useful rather than where the model gives up.
+
+An **audio clip on the timeline can name whose voice it is**: pick a subject in the clip's
+info panel and the prompt says so in the guide's own words — `<Audio 1> is the voice-timbre
+reference for <Subject 1> (S1).` Leave it unset and the clip stays a general voice
+reference, as before.
+
 **Analyze** is optional and off the critical path. It sends the slot image to a local
 vision model and pastes back a one-line description, so `@char1` still means something in
 **Refs OFF** mode, where H3 gets no image at all. Nothing is installed for you and nothing
@@ -272,8 +286,11 @@ To use it, run a vision model locally and point the gear menu's provider row at 
 | LM Studio | `http://127.0.0.1:1234` | load a vision model, start the local server |
 | Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint |
 
-With Ollama the node also asks it to unload the model before a render, so the VLM does not
-sit in VRAM while H3 samples.
+The node also asks the server to release the model before a render, so the VLM is not still
+in VRAM while H3 samples. Ollama takes `keep_alive: 0`; llama-server does too **in router
+mode**, via `POST /models/unload`. A plain `llama-server -m model.gguf` has no such
+endpoint — give it `--sleep-idle-seconds N` and it will let go by itself. LM Studio manages
+residency on its own.
 
 **Keyframes go on the first and last frame only.** H3's `PackedLayout` anchors exactly
 those two positions; an image stranded in the middle of a window is reported in the
@@ -316,6 +333,20 @@ every cut. `@char1` therefore expands to `<Subject 1>` here.
 **ComfyUI** switches to `[0s-1.5s] …`, the notation the ComfyUI H3 templates use. Same
 timeline, same references, only the wording changes — so it is a fair A/B.
 
+### Writing it yourself
+
+**EDIT** on the COMPILED PROMPT panel hands the text over to you. It starts as whatever the
+timeline just compiled, so there is nothing to retype, and **REVERT** throws your version
+away and compiles again. While it is on, the panel is titled `PROMPT (HAND-WRITTEN)` and
+says that timeline edits no longer touch the text.
+
+Only the text is yours. Which images, videos and audio clips are loaded still comes from the
+timeline — the tokenizer numbers `<Picture i>` in the order the plan decided, and rewriting
+a sentence cannot renumber that without invalidating what you just wrote. Your version is
+kept as written rather than merged into the next recompile: an edit that vanished when you
+nudged a segment would lose work without asking, and one that survived in silence would stop
+matching the timeline you are looking at.
+
 ### Why a storyboard and not a per-segment mask
 
 If you know LTX Director: its Prompt Relay builds a cross-attention mask so each segment
@@ -344,6 +375,7 @@ and renders the whole shot as it denoises.
 | `preview_target` | `node` shows it on this node — always available. `sampler (VHS)` puts it in the sampler's usual preview slot and needs [VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) installed; `both` does both. |
 | `preview_frames` | Cap on **latent** frames used, thinned evenly across the shot, so it shortens nothing. The main cost knob. |
 | `preview_fps` | The shot's frame rate. A FLOAT, so the Director's `fps` output wires straight in. |
+| `playback` | `true speed` (default) spreads the sampled frames across the shot's real length, so the preview lasts as long as the finished clip. `source fps` plays them at `preview_fps` flat, like ComfyUI's own preview. |
 | `max_resolution` | Long edge of the preview image, as a **target** — latent2rgb frames arrive at latent size (a 1344×768 shot is an 84×48 grid), so this upscales them smoothly. |
 | `webp_quality` | Quality of the animation sent to the browser. |
 | `every_n_steps` | Never preview more often than every N sampler steps. |
@@ -356,6 +388,15 @@ decode, scale and encode that preview. Not browser time, not the sampler. With
 because the real decoder expands 37 latent frames into 124 output frames through a 5 GB
 VAE. Capping the frame *rate* would not help — rate only sets playback speed. The cost
 knobs are `preview_frames` (try 4–8 for VAE), `max_resolution` and `every_n_steps`.
+
+**Why the badge says `4.7fps of 24`.** With `true speed` the rate is derived, not set: the
+frames that survive thinning are spread across the shot's real length. In `latent2rgb`
+there is one image per latent frame and H3 compresses time about 3.35×, so a 124-frame shot
+has 37 images to show and the rate cannot pass `preview_fps / 3.35` — measured, 7.16 fps at
+24. That is not a setting being ignored; other packs show a round 24 because they play the
+same frames without correcting for the compression, which runs the preview 3.35× too fast.
+Switch `playback` to `source fps` if that is the trade you want: motion at normal speed,
+clip over early.
 
 `vae (quality)` is the answer to "is there a small preview VAE, like LTX 2.3?" — there is
 not. MiniMax has not released a TAESD-style decoder (`latent_format.taesd_decoder_name` is
