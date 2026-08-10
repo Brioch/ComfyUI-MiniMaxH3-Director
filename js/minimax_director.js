@@ -37,6 +37,12 @@ const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller image
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio", "inpaint_audio", "use_custom_motion", "override_audio"];
 
+// Subject slots. Three was a number baked into the code, not a model limit — the card
+// caps total reference images at 9 and each slot holds 2, so there is room for more.
+const CHAR_SLOTS_DEFAULT = 3;
+const CHAR_SLOTS_MIN = 1;
+const CHAR_SLOTS_MAX = 9;
+
 function hideWidget(w) {
   if (!w) return;
 
@@ -695,6 +701,11 @@ const STYLES = `
   .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
   .mmxd-sound-area { position: absolute; top: 14px; left: 0; width: 100%; height: calc(100% - 14px); background: transparent; color: #d0d0d0; border: none; padding: 0 6px 4px 6px; resize: none; font-size: 11px; line-height: 1.35; font-family: inherit; box-sizing: border-box; outline: none; }
   .mmxd-sound-area::placeholder { color: #4a4a4a; }
+  /* --- subject-slot stepper --- */
+  .mmxd-character-stepper { display: flex; align-items: center; gap: 4px; align-self: center; margin-left: 4px; }
+  .mmxd-character-step-btn { width: 22px; height: 22px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; background: #2a2a2a; color: #d0d0d0; border: 1px solid #444; border-radius: 4px; font-size: 14px; font-family: inherit; cursor: pointer; padding: 0; }
+  .mmxd-character-step-btn:hover { background: #383838; border-color: #666; color: #fff; }
+  .mmxd-character-step-count { font-size: 9px; color: #6a6a6a; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; min-width: 56px; text-align: center; }
 `;
 
 let styleEl = document.getElementById("minimax-h3-director-styles");
@@ -889,7 +900,9 @@ function parseInitial(jsonStr) {
           images: Array.isArray(c.images) ? c.images : [],
           description: c.description || ""
         }));
-        while (parsed.characters.length < 3) {
+        // pad up to the default, never truncate — a workflow saved with more slots keeps
+        // every one of them
+        while (parsed.characters.length < CHAR_SLOTS_DEFAULT) {
           parsed.characters.push({ images: [], description: "" });
         }
       }
@@ -9175,16 +9188,21 @@ class TimelineEditor {
     container.className = "mmxd-characters-container";
 
     if (!this.timeline.characters) {
-      this.timeline.characters = [
-        { images: [], description: "" },
-        { images: [], description: "" },
-        { images: [], description: "" }
-      ];
+      this.timeline.characters = Array.from(
+        { length: CHAR_SLOTS_DEFAULT }, () => ({ images: [], description: "" }));
+    }
+    // however many were saved, within the range the model card allows for
+    this.charSlotCount = Math.max(
+      CHAR_SLOTS_MIN, Math.min(CHAR_SLOTS_MAX, this.timeline.characters.length || CHAR_SLOTS_DEFAULT));
+    while (this.timeline.characters.length < this.charSlotCount) {
+      this.timeline.characters.push({ images: [], description: "" });
     }
 
     this.characterSlots = [];
+    this._charPanelParent = parent;
+    this._charPanelContainerEl = container;
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < this.charSlotCount; i++) {
       const slot = document.createElement("div");
       slot.className = "mmxd-character-slot";
       slot.dataset.index = i;
@@ -9226,6 +9244,47 @@ class TimelineEditor {
       container.appendChild(slot);
       this.characterSlots.push(slot);
     }
+
+    // --- add / remove a slot ---------------------------------------------------------
+    // Three was a guess baked into the code in three places, not a limit of the model:
+    // the card allows nine reference images in total, and each slot holds two. Issue #8.
+    const stepper = document.createElement("div");
+    stepper.className = "mmxd-character-stepper";
+
+    const mkBtn = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.className = "mmxd-character-step-btn";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+      return b;
+    };
+    const count = document.createElement("span");
+    count.className = "mmxd-character-step-count";
+
+    const rebuild = () => {
+      const parentEl = this._charPanelParent;
+      this._charPanelContainerEl?.remove();
+      this.createCharacterSlots(parentEl);
+      this.commitChanges(true);
+    };
+    this._charStepperRefresh = () => {
+      count.textContent = `${this.charSlotCount} subject${this.charSlotCount === 1 ? "" : "s"}`;
+    };
+
+    stepper.appendChild(mkBtn("−", "One subject fewer — the last slot and its images go", () => {
+      if (this.charSlotCount <= CHAR_SLOTS_MIN) return;
+      this.timeline.characters.splice(this.charSlotCount - 1, 1);
+      rebuild();
+    }));
+    stepper.appendChild(count);
+    stepper.appendChild(mkBtn("+", "One subject more", () => {
+      if (this.charSlotCount >= CHAR_SLOTS_MAX) return;
+      this.timeline.characters.splice(this.charSlotCount, 0, { images: [], description: "" });
+      rebuild();
+    }));
+    container.appendChild(stepper);
+    this._charStepperRefresh();
 
     parent.appendChild(container);
     this.charPanelContainer = container;
@@ -9325,14 +9384,12 @@ class TimelineEditor {
   updateCharacterSlotsUI() {
     if (!this.characterSlots) return;
     if (!this.timeline.characters) {
-      this.timeline.characters = [
-        { images: [], description: "" },
-        { images: [], description: "" },
-        { images: [], description: "" }
-      ];
+      this.timeline.characters = Array.from(
+        { length: CHAR_SLOTS_DEFAULT }, () => ({ images: [], description: "" }));
     }
+    this._charStepperRefresh?.();
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < this.characterSlots.length; i++) {
       const slot = this.characterSlots[i];
       const data = this.timeline.characters[i] || { images: [], description: "" };
       slot.innerHTML = "";

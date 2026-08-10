@@ -233,6 +233,22 @@ sub_off = compile(tl([img(0, 144, "a.png", prompt="@char1 turns around")], chara
 check_in("@char1 resolves to the description with refs off",
          "a woman in a red coat turns around", sub_off["prompt"])
 
+# the slot count belongs to the editor, so the tag substitution follows it
+check("a fourth slot's tag resolves too",
+      plan.substitute_char_tags("@char4 waves", {4: "the dog"}), "the dog waves")
+check("double digits are not eaten by the single-digit tag",
+      plan.substitute_char_tags("@char10 and @char1",
+                                {1: "one", 10: "ten"}), "ten and one")
+check("an unresolved tag is left alone",
+      plan.substitute_char_tags("@char7 waits", {1: "one"}), "@char7 waits")
+many_chars = [{"images": [{"b64": "x", "name": "%d.png" % i}], "description": "subject %d" % i}
+              for i in range(1, 6)]
+five = compile(tl([img(0, 144, "a.png", prompt="@char5 arrives")], ref_mode="ON",
+                  characters=many_chars))
+check("five character slots all get a picture",
+      [s["source"] for s in five["ref_image_slots"]][:5], ["char"] * 5)
+check_in("the fifth slot resolves in a shot prompt", "<Subject 5> arrives", five["prompt"])
+
 # ------------------------------------------------- issue #7: soundscape / music
 audio = tl([img(0, 144)], ref_mode="ON")
 audio["global_prompt"] = ("a woman walks through a market\n"

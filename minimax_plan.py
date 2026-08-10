@@ -54,13 +54,16 @@ def fmt_seconds(value):
 
 
 def substitute_char_tags(text, replacements):
-    """Swap @character1/@char1 .. @character3/@char3 for their resolved text."""
+    """Swap @character<n>/@char<n> for its resolved text, for however many slots exist.
+
+    The slot count is the editor's to decide, so this follows whatever it sends rather
+    than a hardcoded three. Highest number first: without that, replacing @char1 inside
+    "@char10" would leave a stray "0" behind.
+    """
     if not text:
         return text or ""
-    for slot in (1, 2, 3):
-        value = replacements.get(slot)
-        if not value:
-            continue
+    for slot in sorted((s for s in replacements if replacements.get(s)), reverse=True):
+        value = replacements[slot]
         for tag in ("@character%d" % slot, "@char%d" % slot):
             text = text.replace(tag, value)
     return text
