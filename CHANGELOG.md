@@ -245,6 +245,63 @@ than that, and two of its sections were structurally missing from the output.
   could not number around them and silently showed `<Picture 2>` where the render would
   send `<Picture 5>`. It now warns instead of quietly disagreeing.
 
+- **The resolution panel covers every aspect ratio the model card lists, in both
+  orientations.** Six presets reached 16:9, 9:16 and 1:1; 21:9, 4:3 and 3:4 are in MiniMax's
+  own output envelope and had to be worked out by hand — from an area cap, in multiples of
+  32 — and typed into Width and Height. There are 26, at two sizes:
+
+  | Ratio | Native | Fast |
+  |---|---|---|
+  | 21:9 | 1344×576 | 1120×480 |
+  | 2:1 | 1344×672 | 960×480 |
+  | 16:9 | 1344×768 | 864×480 |
+  | 3:2 | 1152×768 | 736×480 |
+  | 4:3 | 1024×768 | 640×480 |
+  | 5:4 | 960×768 | 608×480 |
+  | 1:1 | 992×992 | 640×640 |
+  | 4:5 | 768×960 | 480×608 |
+  | 3:4 | 768×1024 | 480×640 |
+  | 2:3 | 768×1152 | 480×736 |
+  | 9:16 | 768×1344 | 480×864 |
+  | 1:2 | 672×1344 | 480×960 |
+  | 9:21 | 576×1344 | 480×1120 |
+
+  **Native** keeps H3's 768 px short edge, except at the two widest ratios where 1344 is the
+  long-edge cap and the short edge gives way instead. **Fast** is the same list at a 480 px
+  short edge, 1:1 aside, which stays area-matched to its tier rather than dropping to
+  480×480. Every edge is a multiple of 32 — H3's own step, and what `divisible_by` defaults
+  to — so a preset is never quietly floored to something else on the way in.
+
+  No preset goes past the native area now, which retires `16:9 2K — 1920×1088`: a canvas
+  outside the trained envelope is worth typing deliberately rather than picking by name. A
+  graph saved at 1920×1088 is unaffected — the panel stores plain `custom_width` /
+  `custom_height` numbers, not a preset — and still reads back as 16:9 at 2.09 MP.
+
+- **Or name a shape and a pixel budget instead of a canvas.** A new **Aspect / MP** row
+  takes an aspect ratio and a figure in megapixels and fills Width and Height with the best
+  pair of /32 edges that holds the ratio. Holding the ratio outweighs hitting the budget
+  exactly, and overshooting the budget is penalised twice as hard as undershooting it, since
+  memory is what a budget is protecting: 16:9 at 1.03 MP lands on H3's own 1344×768 rather
+  than the 1376×768 that is closer to true 16:9 and 2.6% more canvas. Either box works on
+  its own — a budget with no ratio picked rescales the shape already in the boxes — and
+  typing Width and Height by hand still works, with both menus following along and reading
+  `—` for a shape the ratio list does not name.
+
+- **A timeline image no longer collapses the canvas to one pixel.** `resize_image`'s
+  cover-crop sized the scaled image with `int(W * ratio)`, and a ratio that is exact in
+  arithmetic comes back a hair under its integer in floating point — `704 * (480 / 704)` is
+  `479.99999999999994`. The cover then landed one pixel short of the canvas, the centre slice
+  started at −1, and a 1px-wide image came out: a 704×1408 timeline image fitted to 480×640
+  hit the Director's canvas guard as *"the canvas came out 1x640"*, naming a width nothing had
+  asked for. Roughly one source width in nine does this at a 480 px canvas, and the crop is
+  the default fit, so it was reachable from any preset. Rounding rather than truncating — and
+  requiring a cover to be at least the size of what it covers — makes it unreachable.
+
+  The same truncation was quietly costing a whole 32-block in the aspect-preserving methods,
+  where nothing crashed and so nobody looked: **maintain aspect ratio** fitted a 1920×1080
+  image into a 1024×1024 box at 992×544 rather than the 1024×576 the code's own docstring
+  promises.
+
 - Removed a note-pruning path that parsed `<Picture N>` back out of finished sentences to
   drop trimmed references. Declarations are now built after the caps have trimmed, so
   there is nothing to prune — and the per-type caps made that path unreachable anyway

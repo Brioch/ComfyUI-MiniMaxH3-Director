@@ -911,6 +911,17 @@ def resize_image(tensor: torch.Tensor, target_w: int, target_h: int,
     def snap(val, div):
         return max(div, (int(val) // div) * div)
 
+    def scaled(edge, ratio):
+        # Round, don't truncate. A ratio that is exact in arithmetic comes back a hair under
+        # its integer in floating point — 704 * (480 / 704) is 479.99999999999994 — and
+        # int() then throws a whole pixel away. That pixel is not cosmetic: in the
+        # cover-crop below it made `new_w` one short of the target, so the centre slice ran
+        # from -1 and yielded a 1px-wide image (a 704x1408 timeline image fitted to 480x640
+        # reached the Director's canvas guard as "the canvas came out 1x640"). In the
+        # aspect-preserving branches it cost a whole 32-block: a 1920x1080 image in a 1024
+        # box snapped to 992x544 instead of the 1024x576 this module's caller documents.
+        return int(round(edge * ratio))
+
     tw, th = snap(target_w, divisible_by), snap(target_h, divisible_by)
     N, H, W, C = tensor.shape
     if H == th and W == tw:
@@ -920,11 +931,13 @@ def resize_image(tensor: torch.Tensor, target_w: int, target_h: int,
 
     if method == "maintain aspect ratio":
         ratio = min(tw / W, th / H)
-        out = F.interpolate(t, size=(snap(int(H * ratio), divisible_by), snap(int(W * ratio), divisible_by)),
+        out = F.interpolate(t, size=(snap(scaled(H, ratio), divisible_by), snap(scaled(W, ratio), divisible_by)),
                             mode="bilinear", align_corners=False)
     elif method in ("pad", "pad green"):
         ratio = min(tw / W, th / H)
-        new_w, new_h = snap(int(W * ratio), divisible_by), snap(int(H * ratio), divisible_by)
+        # min() with the box: the inner image is padded up to it, so an edge that came out
+        # even a pixel over would turn F.pad's padding negative and crop instead.
+        new_w, new_h = snap(min(tw, scaled(W, ratio)), divisible_by), snap(min(th, scaled(H, ratio)), divisible_by)
         inner = F.interpolate(t, size=(new_h, new_w), mode="bilinear", align_corners=False)
         pad_l, pad_t = (tw - new_w) // 2, (th - new_h) // 2
         if method == "pad green":
@@ -936,7 +949,9 @@ def resize_image(tensor: torch.Tensor, target_w: int, target_h: int,
                         mode="constant", value=0)
     elif method == "crop":
         ratio = max(tw / W, th / H)
-        new_w, new_h = int(W * ratio), int(H * ratio)
+        # max() with the box: a cover has to be at least the size it is covering, so the
+        # centre slice below cannot start at a negative offset whatever the arithmetic does.
+        new_w, new_h = max(tw, scaled(W, ratio)), max(th, scaled(H, ratio))
         inner = F.interpolate(t, size=(new_h, new_w), mode="bilinear", align_corners=False)
         left, top = (new_w - tw) // 2, (new_h - th) // 2
         out = inner[:, :, top:top + th, left:left + tw]
