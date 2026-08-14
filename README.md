@@ -465,8 +465,8 @@ doubled. Paste a whole line that already starts with its label and it is taken a
 
 One such relationship has its own control rather than a box: an audio clip's **Voice of**
 picks a subject, and the declaration becomes the guide's `<Audio 1> is the voice-timbre
-reference for <Subject 1>.` A **describes** line still wins over it, for when the binding
-is not the whole story.
+reference for <Subject 1> (S1).` A **describes** line still wins over it, for when the
+binding is not the whole story.
 
 Frame anchors and storyboard references are the one exception: they have **retained**
 alone. Their declaration states where the image sits in the video (`<Picture 2> is the
@@ -504,6 +504,38 @@ Only a line that *starts* with a tag counts, so prose that merely mentions `@ref
 contains a colon is left alone — the same rule the `Audio:` / `Music:` lines follow. A shot
 whose only content is a spoken line is still a numbered shot.
 
+**The colon is what makes it dialogue**, and quotes are not a substitute:
+
+```
+@ref1 says "hello sir"   →  <Subject 1> says "hello sir".            prose
+@ref1 says: hello sir    →  <Subject 1> (S1) says, <d>[English] hello sir</d>
+```
+
+The first line reaches the model as narration — no speaker ID, no `<d>` tag, and nothing for
+an `<Audio N>` voice reference to reuse. Nothing is silently reinterpreted, because a line
+that quotes something is not always a line somebody speaks, but the preview now says when a
+line reads as dialogue and stayed prose. Dialogue also wants `@refN`: `@char1` and
+`@character1` still resolve to a subject *label* everywhere, but they do not speak, and the
+preview says that too.
+
+**A spoken line stays where you wrote it.** Dialogue is lifted out of the prompt to be
+rendered, then put back in the same place, so a line between two paragraphs stays between
+them — which is how the guide writes a shot: action, the line it motivates, then more action.
+
+```
+@ref1: before mid segment
+mid segment
+@ref1: after mid segment
+
+→ [Shot 1] a woman (S1) says, <d>[English] before mid segment</d> mid segment.
+  a woman (S1) says, <d>[English] after mid segment</d>
+```
+
+Whichever comes first in the shot — prose or a spoken line — is where the subject is named in
+full, and **called** takes over from there. `</d>` closes a tag rather than ending a sentence,
+so the next words run straight out of it with no full stop, exactly as the guide's example
+does.
+
 `<scenetrans>` and `<cutoff>`, for dialogue crossing a cut or speech that is cut short, are
 passed through untouched if you type them.
 
@@ -536,10 +568,14 @@ work away; the tooltip says so.
 
 An **audio clip on the timeline can name whose voice it is**: pick a subject in the clip's
 info panel and the prompt says so in the guide's own words — `<Audio 1> is the voice-timbre
-reference for <Subject 1>.` Leave it unset and the clip stays a general voice reference, as
-before. The guide's own example ends that sentence with a speaker ID, `(S1)`; this does not,
-because IDs are handed out in the order voices are actually heard and a subject with a voice
-reference need never speak. Where the subject does speak, the ID is on the line itself.
+reference for <Subject 1> (S1).` Leave it unset and the clip stays a general voice reference.
+The speaker ID at the end is the subject's global one, so it is the *speaking* order and not
+the subject number: bind the clip to a subject who talks second and the line ends
+`<Subject 2> (S2)`. The guide is firm that this sentence "reuses the same `(Sx)` but never
+assigns a new one independently", so a subject who never speaks has no ID to reuse and the
+sentence ends on the label alone — which still says whose voice the clip is. The preview says
+when that happens, since a voice reference for someone with no line is usually a missing line
+rather than a deliberate choice.
 
 **Analyze** is optional and off the critical path. It sends the slot image to a local
 vision model and pastes back a one-line description, so `@ref1` still means something in

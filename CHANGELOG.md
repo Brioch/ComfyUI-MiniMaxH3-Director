@@ -188,6 +188,61 @@ than that, and two of its sections were structurally missing from the output.
   alone would have dropped it once the dialogue was lifted out, losing the line and
   shifting every later shot number, including the ones picture notes point at.
 
+  **A voice reference's declaration ends on the speaker's global ID**
+  ([#1](https://github.com/Brioch/ComfyUI-MiniMaxH3-Director/issues/1)), which is what the
+  guide means by "reuse that speaker's global ID in the definition":
+
+  ```
+  subject_definitions:  <Audio 1> is the voice-timbre reference for <Subject 2> (S2).
+  ```
+
+  The ID is the speaking order rather than the subject number, so it cannot be known when
+  that sentence is written — it is filled in once the numbering pass has walked the finished
+  body. A subject who never speaks has no ID to reuse and the sentence ends on the label,
+  which already says whose voice the clip is. A hand-written declaration gets the same
+  treatment when it names the subject, and is left alone when it writes an ID of its own.
+
+- **A spoken line stays where it was written.** Dialogue is lifted out of a shot prompt to be
+  rendered and was then appended to the end of the shot, which only looked right when the
+  line already came last. A line with prose after it moved:
+
+  ```
+  @ref1: before mid segment          [Shot 1] mid segment. a woman (S1) says,
+  mid segment                    →     <d>[English] before mid segment</d> a woman (S1)
+  @ref1: after mid segment             says, <d>[English] after mid segment</d>
+  ```
+
+  It is now put back where it sat, which is how the guide writes a shot — its own Shot 1 goes
+  action, the line that action motivates, then more action. The same pass decides both
+  orderings the guide cares about, so they can no longer disagree: which mention of a subject
+  is its *first* — and so is named in full rather than by its **called** name — and the order
+  of vocal events that hands out `(Sx)`. A frame anchor still rides with the prose rather than
+  trailing the shot, since a spoken line is not something a shot "begins from". `</d>` no
+  longer picks up a full stop it never needed.
+
+- **The live preview reports a line that reads as dialogue and stayed prose.** The colon is
+  what makes a tagged line dialogue, and `@ref1 says "hello sir"` — the natural thing to
+  type — has none, so it reached the model as narration: no speaker ID, no `<d>[Language]
+  …</d>`, and nothing for an `<Audio N>` voice reference to reuse. The line is not
+  reinterpreted, because prose quotes things nobody says out loud, but it is no longer
+  silent:
+
+  ```
+  [Shot 2] `@ref1 says "hello sir"` reads as dialogue but has no colon, so it stayed
+  narration — no speaker ID, no <d>[Language] …</d>. Dialogue is `@ref1 <how it is said>:
+  the words`.
+  ```
+
+  `@char1 says: hello` is reported the same way: the alias resolves to a subject label
+  everywhere, but only `@refN` speaks.
+
+- **Two required fields are reported when they are empty.** `detailed_description` joins
+  `overall_soundscape`, which was already checked — and unlike the soundscape it has no
+  `N/A`, so an empty one leaves the section out of the prompt entirely rather than visibly
+  blank. A voice reference bound to a subject who never speaks is reported too, naming the
+  tag that would give them a line: the declaration has no `(Sx)` to reuse in that case, which
+  is correct and reads like a bug.
+
 - **The live preview reports a speaker ID written into a retention note**, which the guide
   forbids outright, and **shows `detailed_description`'s word count in its badge** against
   the guide's suggested 350–500 for generation tasks. The count is a figure rather than a
