@@ -269,6 +269,40 @@ than that, and two of its sections were structurally missing from the output.
   preview warned that the clip was under the model card's minimum. It warns and honours the
   trim now, rather than warning and overriding it.
 
+- **A reference no longer spends output time** (issue #2). A reference is an input to the
+  model, not content in the video — `<Video k>` and `<Audio j>` are never composited — but a
+  clip had to overlap the render window to be sent at all, and dropping one stretched the
+  window to cover it. The model card wants each reference audio clip 10–15 s long, so three
+  of them grew the output to 45 s: three times the longest video H3 can make. Shortening it
+  back to something renderable then dropped the second and third clip in silence. Three
+  references and a renderable length were mutually exclusive.
+
+  Neither reference track touches the output length now, and a clip is sent from wherever it
+  sits. Dropped clips land after the last one, which for anything longer than the window
+  means out in the shaded area past it — where the canvas has always said "not in the video",
+  and where a reference belongs. A 5 s render sends all three.
+
+  Position still decides one thing, and only for audio: whether the clip is **also** part of
+  the muxed soundtrack. Inside the window it is both; past it, it is a reference and nothing
+  else, which the clip's info panel says when you select it rather than leaving it to be read
+  off a shaded background. Not the warnings area — parking is the ordinary case now, and a
+  line that fires on every timeline of a kind is how a warnings area stops being read.
+  **Override Audio** is the exception that does warn, because there two explicit choices
+  contradict each other: it takes the soundtrack from the reference videos, and a parked clip
+  has none to give. Everything else about a clip — **Voice of**, **describes**, **retained**,
+  its marker — is unchanged by where it sits, so a timeline whose clips all sat inside the
+  window compiles exactly as it did.
+
+  A retake keeps the old rule: there the window is a deliberate slice of a video that already
+  exists, so outside the marked range means another part of that same video, not parked.
+
+  Two consequences worth naming. A parked reference video is sent whole on its own trim
+  instead of having the window's start subtracted off its head, which was arithmetic about a
+  window the clip has nothing to do with. And both per-type caps — 3 audio, 3 video — used to
+  trim in silence; they now name the clip they dropped, like every other reference limit
+  already did. Parking is what made that worth fixing: a fourth clip out in the shade looks
+  exactly as loaded as the three being sent.
+
 - **Removed the Image Anchor.** An LTX concept that survived the port without ever being
   connected to anything: `isAnchor` was written by the editor, round-tripped through the
   timeline JSON, and read nowhere in Python — H3 has no per-keyframe guide strength for it
