@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- **A reference no longer spends output time.** A reference is an input to the
+  model, not content in the video — `<Video k>` and `<Audio j>` are never composited — but a
+  clip had to overlap the render window to be sent at all, and dropping one stretched the
+  window to cover it. The model card wants each reference audio clip 10–15 s long, so three
+  of them grew the output to 45 s: three times the longest video H3 can make. Shortening it
+  back to something renderable then dropped the second and third clip in silence. Three
+  references and a renderable length were mutually exclusive.
+
+  Neither reference track touches the output length now, and a clip is sent from wherever it
+  sits. Dropped clips land after the last one, which for anything longer than the window
+  means out in the shaded area past it — where the canvas has always said "not in the video",
+  and where a reference belongs. A 5 s render sends all three.
+
+  Position still decides one thing, and only for audio: whether the clip is **also** part of
+  the muxed soundtrack. Inside the window it is both; past it, it is a reference and nothing
+  else, which the clip's info panel says when you select it rather than leaving it to be read
+  off a shaded background. Not the warnings area — parking is the ordinary case now, and a
+  line that fires on every timeline of a kind is how a warnings area stops being read.
+  **Override Audio** is the exception that does warn, because there two explicit choices
+  contradict each other: it takes the soundtrack from the reference videos, and a parked clip
+  has none to give. Everything else about a clip — **Voice of**, **describes**, **retained**,
+  its marker — is unchanged by where it sits, so a timeline whose clips all sat inside the
+  window compiles exactly as it did.
+
+  A retake keeps the old rule: there the window is a deliberate slice of a video that already
+  exists, so outside the marked range means another part of that same video, not parked.
+
+  Two consequences worth naming. A parked reference video is sent whole on its own trim
+  instead of having the window's start subtracted off its head, which was arithmetic about a
+  window the clip has nothing to do with. And both per-type caps — 3 audio, 3 video — used to
+  trim in silence; they now name the clip they dropped, like every other reference limit
+  already did. Parking is what made that worth fixing: a fourth clip out in the shade looks
+  exactly as loaded as the three being sent.
+
+## 0.2.2
+
+Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing
+[#20] and [#19] — and a new node.
+
+- **New node: MiniMax H3 Save Last Frame.** It goes straight after `VAEDecode`, writes the
+  last frame of the batch as a PNG the way Save Image would — same counter, same
+  `%date:…%` tokens, same embedded workflow metadata — and passes the batch on. Every H3
+  render ends on a frame worth keeping, since it is the one you feed back in as the next
+  shot's opening keyframe, and fishing it out otherwise meant a second graph with
+  `ImageFromBatch` wired to a `SaveImage`, rebuilt every time the length changed.
+
+  Two things it deliberately does not do. It never touches the pixels: the IMAGE output is
+  the same tensor object that came in, so it cannot change what anything downstream decodes
+  or muxes. And it does not need to be bypassed — `save` is a widget, because a node that
+  has to be disabled between runs is a node that will be left enabled by accident.
+
 - **The resolution panel covers every aspect ratio the model card lists, in both
   orientations.** Six presets reached 16:9, 9:16 and 1:1; 21:9, 4:3 and 3:4 are in MiniMax's
   own output envelope and had to be worked out by hand — from an area cap, in multiples of
@@ -112,39 +163,10 @@
   tag that would give them a line: the declaration has no `(Sx)` to reuse in that case, which
   is correct and reads like a bug.
 
-- **A reference no longer spends output time.** A reference is an input to the
-  model, not content in the video — `<Video k>` and `<Audio j>` are never composited — but a
-  clip had to overlap the render window to be sent at all, and dropping one stretched the
-  window to cover it. The model card wants each reference audio clip 10–15 s long, so three
-  of them grew the output to 45 s: three times the longest video H3 can make. Shortening it
-  back to something renderable then dropped the second and third clip in silence. Three
-  references and a renderable length were mutually exclusive.
-
-  Neither reference track touches the output length now, and a clip is sent from wherever it
-  sits. Dropped clips land after the last one, which for anything longer than the window
-  means out in the shaded area past it — where the canvas has always said "not in the video",
-  and where a reference belongs. A 5 s render sends all three.
-
-  Position still decides one thing, and only for audio: whether the clip is **also** part of
-  the muxed soundtrack. Inside the window it is both; past it, it is a reference and nothing
-  else, which the clip's info panel says when you select it rather than leaving it to be read
-  off a shaded background. Not the warnings area — parking is the ordinary case now, and a
-  line that fires on every timeline of a kind is how a warnings area stops being read.
-  **Override Audio** is the exception that does warn, because there two explicit choices
-  contradict each other: it takes the soundtrack from the reference videos, and a parked clip
-  has none to give. Everything else about a clip — **Voice of**, **describes**, **retained**,
-  its marker — is unchanged by where it sits, so a timeline whose clips all sat inside the
-  window compiles exactly as it did.
-
-  A retake keeps the old rule: there the window is a deliberate slice of a video that already
-  exists, so outside the marked range means another part of that same video, not parked.
-
-  Two consequences worth naming. A parked reference video is sent whole on its own trim
-  instead of having the window's start subtracted off its head, which was arithmetic about a
-  window the clip has nothing to do with. And both per-type caps — 3 audio, 3 video — used to
-  trim in silence; they now name the clip they dropped, like every other reference limit
-  already did. Parking is what made that worth fixing: a fourth clip out in the shade looks
-  exactly as loaded as the three being sent.
+[#16]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/16
+[#17]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/17
+[#19]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/19
+[#20]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/20
 
 ## 0.2.1
 
