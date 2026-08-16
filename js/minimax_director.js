@@ -49,6 +49,32 @@ const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller image
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio", "inpaint_audio", "use_custom_motion", "override_audio"];
 
+// The Analyze API key is kept in ComfyUI's own user settings and deliberately NOT in
+// `timeline_data`: that widget is serialised into the workflow JSON, so a key stored
+// there would travel with every workflow the user shares, and with every screenshot of
+// the properties panel (issue #15). Settings live in user/<name>/comfy.settings.json and
+// stay on the machine that typed them.
+const ANALYZE_KEY_SETTING = "MiniMaxH3.Analyze.ApiKey";
+
+function getAnalyzeApiKey() {
+  try {
+    return app.extensionManager?.setting?.get(ANALYZE_KEY_SETTING) || "";
+  } catch (e) {
+    mmxdLog("could not read the Analyze API key setting:", e);
+    return "";
+  }
+}
+
+async function setAnalyzeApiKey(value) {
+  try {
+    await app.extensionManager?.setting?.set(ANALYZE_KEY_SETTING, value || "");
+    return true;
+  } catch (e) {
+    console.warn("[MiniMaxH3] could not save the Analyze API key:", e);
+    return false;
+  }
+}
+
 function hideWidget(w) {
   if (!w) return;
 
@@ -69,6 +95,19 @@ function hideWidget(w) {
 
   if (w.element) w.element.style.display = "none";
   if (w.callback) w.callback(w.value);
+}
+
+// A hidden widget keeps its input slot, and a slot whose widget is never laid out is not
+// drawn anywhere: LiteGraph leaves it sitting at the node's own origin, so the settings
+// panel left five invisible sockets stacked under the title bar, where a dropped link
+// could still land on one (issue #14). Drop the slot when nothing is wired to it — a link
+// saved in an older workflow keeps its socket, and the settings panel keeps ownership of
+// the value either way. Width and height have proper connection-only inputs now.
+function dropUnlinkedWidgetInput(node, name) {
+  if (window.LiteGraph && window.LiteGraph.vueNodesMode) return;   // Vue hides both already
+  if (!node || !node.inputs) return;
+  const i = node.inputs.findIndex(sl => sl.name === name && sl.widget);
+  if (i !== -1 && node.inputs[i].link == null) node.removeInput(i);
 }
 
 function showWidget(w) {
@@ -10236,6 +10275,8 @@ class TimelineEditor {
           provider: this.timeline.analyzeProvider || "ollama",
           base_url: this.timeline.analyzeBaseUrl || "",
           model: this.timeline.analyzeModel || "",
+          // read at send time, not stored with the timeline (issue #15)
+          api_key: getAnalyzeApiKey(),
         })
       });
       const result = await resp.json();
@@ -12628,8 +12669,20 @@ class TimelineEditor {
     modelInput.style.width = "150px";
     modelInput.style.textAlign = "left";
 
+    // A cloud endpoint needs a bearer token, and this row is the only part of the panel
+    // that is NOT written to the timeline — see ANALYZE_KEY_SETTING. type=password so it
+    // is not readable over a shoulder or in the screenshots people attach to issues.
+    const keyInput = document.createElement("input");
+    keyInput.type = "password";
+    keyInput.className = "mmxd-settings-input";
+    keyInput.style.width = "150px";
+    keyInput.style.textAlign = "left";
+    keyInput.placeholder = "sk-… (stays on this machine)";
+    keyInput.value = getAnalyzeApiKey();
+
     const urlRow = this._makeSettingRow("Base URL", urlInput);
     const modelRow = this._makeSettingRow("Model", modelInput);
+    const keyRow = this._makeSettingRow("API key", keyInput);
 
     const refreshProviderRows = () => {
       const prov = this.timeline.analyzeProvider || "ollama";
@@ -12638,9 +12691,13 @@ class TimelineEditor {
       modelInput.placeholder = defs.model || "your-loaded-model-name";
       urlInput.value = this.timeline.analyzeBaseUrl || "";
       modelInput.value = this.timeline.analyzeModel || "";
+      keyInput.value = getAnalyzeApiKey();
       const isOff = (prov === "off");
       urlRow.style.display = isOff ? "none" : "";
       modelRow.style.display = isOff ? "none" : "";
+      // Local servers want no key, so the row would only be one more thing to wonder
+      // about; a reverse proxy in front of one is what 'custom' is for.
+      keyRow.style.display = (prov === "custom") ? "" : "none";
     };
 
     provSelect.addEventListener("change", (e) => {
@@ -12659,17 +12716,20 @@ class TimelineEditor {
       this.timeline.analyzeModel = modelInput.value.trim();
       this.commitChanges(true);
     });
+    // No commitChanges — nothing about the key belongs in the timeline.
+    keyInput.addEventListener("change", () => { setAnalyzeApiKey(keyInput.value.trim()); });
 
     menu.appendChild(this._makeSettingRow("Provider", provSelect));
     menu.appendChild(urlRow);
     menu.appendChild(modelRow);
+    menu.appendChild(keyRow);
 
     const provNote = document.createElement("div");
     provNote.style.fontSize = "9px";
     provNote.style.color = "#777";
     provNote.style.padding = "2px 4px 0";
     provNote.style.lineHeight = "1.3";
-    provNote.textContent = "Off = type descriptions by hand. LM Studio / Custom: hard VRAM eviction depends on your server version; set a short JIT/auto-unload TTL there if it doesn't release.";
+    provNote.textContent = "Off = type descriptions by hand. LM Studio / Custom: hard VRAM eviction depends on your server version; set a short JIT/auto-unload TTL there if it doesn't release. An API key is saved in ComfyUI's settings, not in the workflow — or leave it empty and set MINIMAX_DIRECTOR_VLM_API_KEY in the environment.";
     menu.appendChild(provNote);
 
     refreshProviderRows();
@@ -13178,6 +13238,22 @@ const APPENDED_WIDGET_DEFAULTS = [
 
 app.registerExtension({
   name: "MiniMaxH3DirectorCS",
+  // Declared here so the key also has a home in ComfyUI's own Settings dialog, and so it
+  // is stored server-side per user rather than in the workflow (issue #15).
+  settings: [
+    {
+      id: ANALYZE_KEY_SETTING,
+      category: ["MiniMax H3 Director", "Analyze", "API key"],
+      name: "Analyze API key",
+      tooltip: "Bearer token for a cloud OpenAI-compatible endpoint used by the Analyze "
+             + "button. Stored in your ComfyUI user settings, never in a workflow. Leave "
+             + "empty to use the MINIMAX_DIRECTOR_VLM_API_KEY or OPENAI_API_KEY "
+             + "environment variable instead.",
+      type: "text",
+      attrs: { type: "password" },
+      defaultValue: "",
+    },
+  ],
   async setup() {
     // On Run, ask the chosen analyze backend to release its model from VRAM so it doesn't
     // compete with MiniMax H3 generation. Only fires when an MiniMax H3 Director is in the graph and its
@@ -13205,7 +13281,8 @@ app.registerExtension({
             try {
               await api.fetchApi("/minimax_director/unload_ollama", {
                 method: "POST",
-                body: JSON.stringify({ provider, base_url: baseUrl, model }),
+                body: JSON.stringify({ provider, base_url: baseUrl, model,
+                                       api_key: getAnalyzeApiKey() }),
               });
             } catch (e) {}
           }
@@ -13443,6 +13520,13 @@ app.registerExtension({
           const left = mkCol("Resolution");
           // MiniMax H3's native canvas is a 768 px short edge capped at 768x1344.
           // Larger canvases work but cost time and leave the trained envelope.
+          //
+          // 1920x1088 is NOT what the model card means by 2K, and calling it that was
+          // misleading (issue #14). The card's 2K comes from H3-Regenerate-2K, a separate
+          // in-context regeneration module that MiniMax has not open-sourced \u2014 "this
+          // module is not yet open-sourced. We will release it once it is ready." What
+          // this preset does is render the base model well past its own canvas, so it is
+          // labelled as what it is.
           const RES = [
             { label: "Custom", w: 0, h: 0 },
             { label: "16:9 native \u2014 1344\u00d7768", w: 1344, h: 768 },
@@ -13450,7 +13534,7 @@ app.registerExtension({
             { label: "1:1 native \u2014 992\u00d7992", w: 992, h: 992 },
             { label: "16:9 fast \u2014 864\u00d7480", w: 864, h: 480 },
             { label: "9:16 fast \u2014 480\u00d7864", w: 480, h: 864 },
-            { label: "16:9 2K \u2014 1920\u00d71088", w: 1920, h: 1088 },
+            { label: "16:9 past native \u2014 1920\u00d71088", w: 1920, h: 1088 },
           ];
           const presetRow = mkRow("Preset");
           const presetSel = createMenuSelect(RES.map((p, i) => ({ value: String(i), label: p.label })), { width: "126px" });
@@ -13603,6 +13687,10 @@ app.registerExtension({
             if (typeof unitSel !== "undefined" && unitSel) unitSel.value = timeMode();
             timeRefreshers.forEach(fn => fn());
             ensureTimingHidden();
+            // also on load: configure() restores whatever slots the saved JSON carried,
+            // including the invisible ones a pre-0.2.1 workflow was saved with
+            ["custom_width", "custom_height", "frame_rate", "resize_method", "ref_image_size"]
+              .forEach(n => dropUnlinkedWidgetInput(node, n));
           };
           node._mmxSettingsRefresh = refreshFromWidgets;
           refreshFromWidgets();
@@ -13611,7 +13699,8 @@ app.registerExtension({
           setTimeout(refreshFromWidgets, 60);
           setTimeout(refreshFromWidgets, 250);
 
-          ["custom_width", "custom_height", "frame_rate", "resize_method", "ref_image_size"].forEach(n => { hideWidget(getW(n)); });
+          ["custom_width", "custom_height", "frame_rate", "resize_method", "ref_image_size"]
+            .forEach(n => { hideWidget(getW(n)); dropUnlinkedWidgetInput(node, n); });
           ensureTimingHidden();
         };
         const settingsContainer = document.createElement("div");

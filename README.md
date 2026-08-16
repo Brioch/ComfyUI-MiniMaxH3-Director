@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.2.0-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.2.1-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -45,7 +45,15 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
-**0.2.0** · 2026-08-09 — full reference mode. A reference is no longer always a character
+**0.2.1** · 2026-08-16 — **width and height can be wired in** from a resolution node, as
+connection-only inputs beside `start` / `end` / `duration`. The **Analyze** button can now
+reach a cloud endpoint: there is an API-key field, kept in ComfyUI's settings and never in
+your workflow. A subject description written for `@ref1` reaches the prompt in the
+**ComfyUI** prompt format too, where it used to be dropped. And **4–15 s is the trained
+range, not a limit** — longer renders work, they just leave the envelope the model card
+describes.
+
+**0.2.0** · 2026-08-16 — full reference mode. A reference is no longer always a character
 and no longer always followed exactly: subject slots carry a **kind** (scene, prop, style,
 …) and every reference carries a **retention marker** from `fully_preserved` to
 `weak_reference`, plus a box to write the sentence that follows it in your own words.
@@ -256,6 +264,28 @@ readable; open them if you want to change sampler, scheduler or steps.
 | **Audio** | music, SFX | `<Audio j>` reference and/or the muxed soundtrack |
 | **Subject slots** | images | `<Subject N>` definitions — people, scenes, props, styles |
 
+### Driving it from other nodes
+
+The settings panel owns the canvas and the window, and hides the widgets behind them so
+there is one place to look. Five sockets exist for the cases where another node should
+decide instead — they are **connection-only**, so they take up no space until you wire
+something to one:
+
+| Input | Unit | Replaces |
+|---|---|---|
+| `width`, `height` | pixels | the panel's Width / Height |
+| `start`, `end` | seconds | the panel's window start and end |
+| `duration` | seconds | the panel's Duration |
+
+Wire a resolution node — `Resolution Selector`, an `Empty Latent` sidecar, anything that
+outputs two integers — into `width` and `height` and the panel's own fields step aside.
+Leave them unconnected and nothing changes.
+
+A wire carries no minimum, and a node whose value was never set hands over **0**. Zero
+pixels and zero seconds are refused by name rather than passed on, because what they break
+breaks a long way from the wire that caused it. If you want the canvas derived from the
+first image, leave the sockets alone — that is what the panel's `0` already means.
+
 ### Reference limits
 
 From MiniMax's own model card — not from ComfyUI's node signatures, which are looser.
@@ -268,7 +298,15 @@ These are enforced, with a warning naming exactly what was dropped:
 | Reference audio | ≤ 3 clips |
 | **All types together** | **≤ 12 files** |
 
-Output envelope: 4–15 s at 24 fps. Aspect ratios 21:9, 16:9, 4:3, 1:1, 3:4, 9:16.
+Output envelope: 4–15 s at 24 fps — the range H3 was trained on, and **not** a limit this
+pack enforces; see [Longer than 15 seconds](#longer-than-15-seconds). Aspect ratios 21:9,
+16:9, 4:3, 1:1, 3:4, 9:16.
+
+**About "2K".** The model card's 2K does not come from these weights. It comes from
+`H3-Regenerate-2K`, a separate in-context regeneration pass, and MiniMax says of it: "this
+module is not yet open-sourced. We will release it once it is ready." The base model's
+canvas is a 768 px short edge. The `1920×1088` preset is therefore labelled *past native*
+— it renders, at real cost in time, outside the canvas the model knows.
 
 ### When a reference video runs you out of memory
 
@@ -498,18 +536,31 @@ before. The guide's own example ends that sentence with a speaker ID, `(S1)`; th
 because IDs are handed out in the order voices are actually heard and a subject with a voice
 reference need never speak. Where the subject does speak, the ID is on the line itself.
 
-**Analyze** is optional and off the critical path. It sends the slot image to a local
-vision model and pastes back a one-line description, so `@ref1` still means something in
+**Analyze** is optional and off the critical path. It sends the slot image to a vision
+model and pastes back a one-line description, so `@ref1` still means something in
 **Refs OFF** mode, where H3 gets no image at all. Nothing is installed for you and nothing
 is sent anywhere unless you press the button.
 
-To use it, run a vision model locally and point the gear menu's provider row at it:
+To use it, point the gear menu's provider row at a vision model:
 
 | Provider | Default URL | Set up |
 |---|---|---|
 | Ollama | `http://127.0.0.1:11434` | `ollama pull qwen2.5vl:7b` — any vision model works, the field is free text |
 | LM Studio | `http://127.0.0.1:1234` | load a vision model, start the local server |
-| Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint |
+| Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint, local or hosted |
+
+**Using a hosted endpoint.** Pick **Custom**, enter its base URL and model name, and put
+the key in the **API key** row that appears. Two things about where that key is kept:
+
+* it goes into **ComfyUI's own user settings** (`user/<name>/comfy.settings.json`), which
+  stay on your machine — *not* into the timeline, which is serialised into the workflow
+  JSON and would carry the key into every copy you share;
+* leave the field empty and the environment is used instead:
+  `MINIMAX_DIRECTOR_VLM_API_KEY`, then `OPENAI_API_KEY`.
+
+The same key reaches the **Enhance Prompt** node through the environment. Its widget is
+called `api_key_env` and takes the **name of a variable**, not a key — widget values *are*
+saved inside the workflow, so a key typed into one would travel with it.
 
 The node also asks the server to release the model before a render, so the VLM is not still
 in VRAM while H3 samples. Ollama takes `keep_alive: 0`; llama-server does too **in router
@@ -739,7 +790,14 @@ it a timeline, so it has been withdrawn rather than shipped as a feature nobody 
 operate. The code stays in the repository; the reasoning is written down at the top of
 `minimax_chain.py`.
 
-Until it returns, H3's trained range is the limit: 4-15 s per render.
+**4–15 s is H3's trained range, not a cap.** Nothing in this pack limits the length, and
+longer windows do render — reported working at 45 s, and the model card's envelope is
+simply where quality is known to hold. Past it, expect drift and looping, and a render
+time that climbs faster than the video does: attention cost goes with the square of the
+sequence, while memory grows roughly with its length. The node says so once in the console
+and once in the prompt panel, and then gets out of the way.
+
+For a dependable long piece the answer is still several in-range windows spliced together.
 
 ## Troubleshooting
 

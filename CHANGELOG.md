@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.2.1
+
+Four reports, and one of them was right about something this pack had been saying wrongly
+since 0.1.0.
+
+- **`width` and `height` can be wired in** ([#14]). The settings panel owns
+  `custom_width` / `custom_height` and hides them, and a hidden widget's input slot is
+  never laid out — LiteGraph left it at the node's own origin, so five invisible sockets
+  sat stacked under the title bar. There was no reachable way to drive the canvas from a
+  resolution node. There are now two connection-only inputs beside `start` / `end` /
+  `duration`, and the five orphaned slots are dropped when nothing is wired to them (a
+  link saved in an older workflow keeps its socket).
+
+  A wire carries no minimum where a widget does, so `0` — what an upstream node hands over
+  when its own value was never set — is refused by name rather than passed into the VAE,
+  the same guard `duration` grew in 0.1.2.
+
+- **A subject description reaches the ComfyUI prompt format** ([#14]). That format resolves
+  `@ref1` to the bare `<Picture 1>` and has no `subject_definitions` section, so a
+  description typed into a slot had nowhere to go and was simply dropped: the prompt said
+  "`<Picture 1>` steps out of the doorway" and never once said who that is. It now goes
+  into the flat `Reference notes:` line, subjects before pictures, so the thing is
+  introduced before the frame that shows it. The MiniMax format is unchanged — it has had
+  the section all along, and started *using* the description in 0.2.0.
+
+- **An API key for a cloud vision model** ([#15]). Nothing here ever sent an
+  `Authorization` header, so the `Custom (OpenAI-compatible)` provider could only reach a
+  server that did not ask for one. Both the Analyze button and the Enhance node send a
+  bearer token now, and a 401 says where to put the key instead of echoing the endpoint's
+  own body.
+
+  Where the key is kept mattered more than sending it. The Analyze settings live in
+  `timeline_data`, which is serialised into the workflow JSON — a key typed there would
+  travel with every workflow you share. So the gear menu's field writes to **ComfyUI's user
+  settings** instead, and the Enhance node's widget takes the **name of an environment
+  variable** rather than a key, because widget values *are* saved with the workflow.
+  Failing that: `MINIMAX_DIRECTOR_VLM_API_KEY`, then `OPENAI_API_KEY`.
+
+- **4–15 seconds is the trained range, not a limit** ([#12]). Nothing in this pack ever
+  capped the length, but the README said "H3's trained range is the limit" and the console
+  warned of "a VRAM wall" — which nobody here had measured, and which a 45-second render on
+  a 5090 contradicts. Both now say what is actually true: it renders, quality leaves the
+  envelope the model card describes, and the clock climbs faster than the video does
+  because attention cost goes with the square of the sequence while memory goes with its
+  length.
+
+- **The `2K` resolution preset is labelled `past native`** ([#14]). The model card's 2K is
+  not these weights at 1920×1088 — it is `H3-Regenerate-2K`, a separate in-context
+  regeneration pass, and MiniMax says "this module is not yet open-sourced. We will release
+  it once it is ready." The preset still exists; it no longer claims to be something it is
+  not.
+
+- **New offline test file, `test_node.py`** — 35 checks for the parts that need ComfyUI
+  imported, which `test_plan.py` deliberately cannot reach: the automation-socket guards,
+  API-key resolution, and a check that every schema input has a matching `execute()`
+  parameter. `test_plan.py` is up to 270.
+
+[#12]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/12
+[#14]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/14
+[#15]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/15
+
 ## 0.2.0
 
 Full-reference mode, from

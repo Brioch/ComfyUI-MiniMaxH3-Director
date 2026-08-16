@@ -113,6 +113,33 @@ def resolve_canvas(mm, custom_width, custom_height, divisible_by, resize_method,
     return mm.adapt_canvas(src_w, src_h)
 
 
+def resolve_size(custom_width, custom_height, width=None, height=None):
+    """Let a connected `width`/`height` stand in for the settings panel's box.
+
+    The panel owns `custom_width`/`custom_height` and hides them, so a resolution node
+    had no reachable socket to drive them through (issue #14). These two sockets are the
+    same automation pattern as start/end/duration, and they carry the same hazard: a
+    widget has a minimum, a wire has none, and 0 is what an upstream node hands over when
+    its own value was never set. Zero pixels is a mistake worth naming here rather than
+    six frames deep in the VAE — leaving the socket unconnected is how you ask for a
+    canvas derived from the first image.
+    """
+    for name, value in (("width", width), ("height", height)):
+        if value is None:
+            continue
+        if int(value) <= 0:
+            raise ValueError(
+                "MiniMax H3 Director: the connected '%s' is %d. It is an output size in "
+                "pixels and has to be positive. Leave the socket unconnected to derive "
+                "the canvas from the first image instead, and check the node feeding it "
+                "— a value that was never set arrives here as 0." % (name, int(value)))
+    if width is not None:
+        custom_width = int(width)
+    if height is not None:
+        custom_height = int(height)
+    return int(custom_width), int(custom_height)
+
+
 def resolve_window(tdata, fps, start_frame, duration_frames,
                    start=None, end=None, duration=None):
     """Resolve the render window, honouring automation inputs and retake mode.
@@ -358,6 +385,12 @@ class MiniMaxH3Director(io.ComfyNode):
                                tooltip="Automation (connection-only). Window end in SECONDS."),
                 io.Float.Input("duration", force_input=True, optional=True, default=0.0,
                                tooltip="Automation (connection-only). Render length in SECONDS."),
+                io.Int.Input("width", force_input=True, optional=True, default=0,
+                             tooltip="Automation (connection-only). Output width in pixels, "
+                                     "overriding the settings panel's Width. Wire a resolution "
+                                     "node here; leave it unconnected to use the panel."),
+                io.Int.Input("height", force_input=True, optional=True, default=0,
+                             tooltip="Automation (connection-only). Output height. See width."),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
@@ -414,7 +447,8 @@ class MiniMaxH3Director(io.ComfyNode):
                 use_custom_audio=False, inpaint_audio=True, use_custom_motion=True,
                 override_audio=False, ref_image_size="match",
                 shift_video=12.0, shift_audio=3.0, ref_images=None, ref_image_notes="",
-                start=None, end=None, duration=None) -> io.NodeOutput:
+                start=None, end=None, duration=None,
+                width=None, height=None) -> io.NodeOutput:
 
         mm = core()
         tdata = plan.parse_timeline(timeline_data)
@@ -422,6 +456,9 @@ class MiniMaxH3Director(io.ComfyNode):
 
         win_start, duration_frames = resolve_window(
             tdata, fps, start_frame, duration_frames, start, end, duration)
+        # resolved here, next to the window, so both automation paths are refused in the
+        # same place — and before `width`/`height` are reused for the resolved canvas
+        box_w, box_h = resolve_size(custom_width, custom_height, width, height)
 
         extra_refs = 0
         if ref_images is not None:
@@ -440,10 +477,15 @@ class MiniMaxH3Director(io.ComfyNode):
 
         length = p["length"]
         if length > plan.TRAINED_MAX_FRAMES:
+            # Not a limit and never was: nothing here caps the length, and longer windows
+            # do render (issue #12). What leaves the model card's 4-15s envelope is the
+            # quality, and the clock — attention is quadratic in sequence length, so the
+            # render time climbs faster than the video does.
             log.warning("[MiniMaxDirector] %d frames (%.1fs) is past H3's trained range of "
-                        "~%d-%d frames (~4-15s). Expect drift, looping or a VRAM wall — "
-                        "shorten the timeline, or render it as several windows and splice "
-                        "them together.",
+                        "~%d-%d frames (the model card's 4-15s). It renders — expect drift "
+                        "or looping, and a render time that climbs faster than the length. "
+                        "For a dependable result shorten the timeline, or render it as "
+                        "several windows and splice them together.",
                         length, p["actual_seconds"], plan.TRAINED_MIN_FRAMES,
                         plan.TRAINED_MAX_FRAMES)
         elif length < plan.TRAINED_MIN_FRAMES:
@@ -482,7 +524,7 @@ class MiniMaxH3Director(io.ComfyNode):
         canvas_src = first_src
         if canvas_src is None:
             canvas_src = p["events"][0]["tensor"] if p["events"] else None
-        width, height = resolve_canvas(mm, int(custom_width), int(custom_height),
+        width, height = resolve_canvas(mm, box_w, box_h,
                                        int(divisible_by), resize_method, canvas_src)
 
         # Core's PackedLayout divides by `math.sqrt(latent_h * latent_w)`, so a zero-edged

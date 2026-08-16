@@ -389,13 +389,16 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
     <Subject N> definition instead. ComfyUI's tokenizer still labels every image
     <Picture i>, so this is about which labels get *declared*, not which exist.
 
-    Returns (lines, subject_of_slot, labels, pic_texts). `labels` is the ledger
-    build_retention_analysis walks; `pic_texts` is keyed by <Picture N> ordinal.
+    Returns (lines, subject_of_slot, labels, pic_texts, subject_notes). `labels` is the
+    ledger build_retention_analysis walks; `pic_texts` is keyed by <Picture N> ordinal;
+    `subject_notes` is the same subject declarations in the flat phrasing the comfyui
+    format needs, which is the only place that format can carry them at all (issue #14).
     """
     lines = []
     labels = []
     subject_of_slot = {}
     pic_texts = {}
+    subject_notes = []
     subject_no = 0
 
     # --- <Subject N>: the panel slots first, so a subject's number does not move when
@@ -408,9 +411,11 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
         subject_no += 1
         subject_of_slot[slot_index + 1] = subject_no
         label = "<Subject %d>" % subject_no
-        lines.append(_subject_sentence(
+        sentence = _subject_sentence(
             label, slot.get("description"), slot["kind"],
-            " and ".join("<Picture %d>" % o for o in ordinals)))
+            " and ".join("<Picture %d>" % o for o in ordinals))
+        lines.append(sentence)
+        subject_notes.append(sentence.rstrip("."))
         labels.append({"label": label, "marker": slot["retention"], "kind": slot["kind"],
                        "note": slot.get("note", ""), "where": "", "audio": False,
                        "subject": subject_no})
@@ -427,8 +432,10 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
         # two different sentences in two different sections, so they are two fields. One
         # field would mean a subject-defining image could carry one or the other and never
         # both, and would have to mean something else again on a frame anchor.
-        lines.append(_subject_sentence(label, s.get("desc"), s["kind"],
-                                       "<Picture %d>" % (i + 1)))
+        sentence = _subject_sentence(label, s.get("desc"), s["kind"],
+                                     "<Picture %d>" % (i + 1))
+        lines.append(sentence)
+        subject_notes.append(sentence.rstrip("."))
         labels.append({"label": label, "marker": s["retention"], "kind": s["kind"],
                        "note": s.get("note", ""), "where": "", "audio": False,
                        "subject": subject_no})
@@ -508,7 +515,7 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
                        "note": (seg.get("refNote") or "").strip(),
                        "where": "voice of <Subject %d>" % subject if subject else ""})
 
-    return lines, subject_of_slot, labels, pic_texts
+    return lines, subject_of_slot, labels, pic_texts, subject_notes
 
 
 def build_retention_analysis(labels, subject_shots=None):
@@ -1239,11 +1246,15 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # reference that is actually being sent.
     subject_lines, subject_of_slot, ref_labels, pic_texts = [], {}, [], {}
     if ref_mode_on:
-        subject_lines, subject_of_slot, ref_labels, pic_texts = build_subject_definitions(
+        (subject_lines, subject_of_slot, ref_labels, pic_texts,
+         subject_notes) = build_subject_definitions(
             subject_slots, ref_image_slots, ref_video_segs, ref_audio_segs)
         # the comfyui format has no sections to put any of this in, so it keeps the one
-        # flat notes line — which is the same set of facts in the guide's older phrasing
-        ref_notes = [pic_texts[o]["note"] for o in sorted(pic_texts)]
+        # flat notes line — which is the same set of facts in the guide's older phrasing.
+        # Subjects go in front of the pictures: this format resolves a tag to the bare
+        # <Picture N> that shows the subject, so a description typed into a slot had
+        # nowhere at all to go and was simply dropped (issue #14).
+        ref_notes = subject_notes + [pic_texts[o]["note"] for o in sorted(pic_texts)]
 
         # A slot whose pictures were all trimmed away must not keep pointing at an ordinal
         # that no longer exists; it falls back to its description, exactly as it would
