@@ -493,10 +493,10 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
         # A clip can name the subject whose voice it carries, which is the one thing a
         # written sentence should not have to spell out: with two voice references and no
         # binding there is nothing in the prompt saying which voice belongs to whom
-        # (issue #10). The guide's sentence ends "<Subject 1> (S1)", but the speaker ID is
-        # not knowable here — IDs are assigned in vocal-event order, further down, and this
-        # subject may never speak at all. The label alone is unambiguous, and the ID is
-        # written where it belongs, on the line itself.
+        # (issue #10). The guide ends that sentence with the speaker's global ID,
+        # "<Subject 1> (S1)", which is not knowable here — IDs are assigned in vocal-event
+        # order, further down. apply_speaker_ids fills it in afterwards, which is what
+        # `line_index` is for.
         subject = subject_of_slot.get(_audio_subject_slot(seg))
         if subject:
             # the generated declaration has to agree with the marker: telling the model to
@@ -511,8 +511,12 @@ def build_subject_definitions(subject_slots, ref_image_slots, ref_video_segs,
                          % (label, "its signal is reused in the target video." if copied
                             else "follow its voice and timbre."))
         lines.append(_declaration(label, seg.get("refDesc"), generated))
+        # `voice_of` rather than `subject`: build_retention_analysis reads that key as "this
+        # entry *is* a subject" and would replace the audio line's "(voice of <Subject 2>)"
+        # with a shot list belonging to somebody else.
         labels.append({"label": label, "kind": "audio", "audio": True, "marker": marker,
                        "note": (seg.get("refNote") or "").strip(),
+                       "voice_of": subject, "line_index": len(lines) - 1,
                        "where": "voice of <Subject %d>" % subject if subject else ""})
 
     return lines, subject_of_slot, labels, pic_texts, subject_notes
@@ -652,30 +656,24 @@ def compile_storyboard_minimax(global_prompt, shots, soundscape="", music="",
     if gp:
         body.append(gp)
     for index, shot in enumerate(written):
-        text = shot["prompt"].strip()
+        pieces = list(shot.get("pieces") or [])
         # guide 5.3: a frame anchor is named in the shot itself, in natural phrasing, as
-        # well as being declared above. It goes after the shot's own text: a later shot
-        # opens "At 00:05.000, " and the sentence has to continue out of that comma, which
-        # a capitalised "The shot begins from…" cannot do.
+        # well as being declared above. It rides with the prose rather than trailing the whole
+        # shot — it says how the shot opens, and a spoken line is not something a shot "begins
+        # from" — so it goes after the last prose piece, which for a shot that is all prose is
+        # where it has always gone.
         phrases = " ".join(shot.get("ref_phrases") or [])
         if phrases:
-            if text:
-                if not text.endswith((".", "!", "?", ",", ";", ":")):
-                    text += "."
-                text = "%s %s" % (text, phrases)
-            elif index:
-                # nothing of the user's own to open on, and a later shot opens
+            last_prose = max((i for i, (kind, _) in enumerate(pieces) if kind == "prose"),
+                             default=-1)
+            if last_prose < 0:
+                # nothing of the user's own to attach to, and a later shot opens
                 # "At 00:05.000, " — so our own sentence has to continue out of that comma
-                text = phrases[0].lower() + phrases[1:]
+                pieces.insert(0, ("prose", phrases if not index
+                                  else phrases[0].lower() + phrases[1:]))
             else:
-                text = phrases
-        # the guide's example ends a shot on its spoken line, after the action that
-        # motivates it
-        spoken = (shot.get("dialogue_text") or "").strip()
-        if spoken:
-            if text and not text.endswith((".", "!", "?")):
-                text += "."
-            text = ("%s %s" % (text, spoken)).strip()
+                pieces.insert(last_prose + 1, ("prose", phrases))
+        text = join_shot_pieces([piece for _, piece in pieces])
         if index == 0:
             body.append("[Shot 1] %s" % text)
         else:
@@ -768,21 +766,38 @@ DESCRIPTION_MIN_WORDS = 350
 DESCRIPTION_MAX_WORDS = 500
 
 
+# Where a lifted dialogue line sat, left behind in the prose so render_shot can put the
+# spoken line back exactly there. A shot is not a paragraph followed by its dialogue — the
+# guide's own Shot 1 goes action, spoken line, more action — so a line written between two
+# paragraphs has to stay between them. Invisible to the user: every mark is consumed during
+# rendering, and any \x00 in the incoming text is dropped before one can be confused for it.
+DIALOGUE_MARK = "\x00%d\x00"
+DIALOGUE_MARK_RE = re.compile("\x00(\\d+)\x00")
+
+# The guide runs an action straight out of a spoken line with no punctuation between them:
+# "…<d>[English] Hey! Watch your dog!</d> She closes her lips…"
+DIALOGUE_CLOSE = "</d>"
+
+
 def split_dialogue(text):
     """Lift `@ref1 says: …` lines out of a shot prompt into structured vocal events.
 
-    Returns (remaining prose, events). Speaker IDs are deliberately *not* assigned here:
-    the guide numbers them "according to the order of actual vocal events in the target
-    video", which is a property of the whole timeline, not of one shot.
+    Returns (remaining prose, events). The prose keeps a DIALOGUE_MARK where each lifted line
+    sat, so the shot can be reassembled in the order it was written.
+
+    Speaker IDs are deliberately *not* assigned here: the guide numbers them "according to the
+    order of actual vocal events in the target video", which is a property of the whole
+    timeline, not of one shot.
     """
     if not text:
         return text or "", []
     kept, events = [], []
-    for line in text.splitlines():
+    for line in text.replace("\x00", "").splitlines():
         match = DIALOGUE_RE.match(line.strip())
         if not match:
             kept.append(line)
             continue
+        kept.append(DIALOGUE_MARK % len(events))
         events.append({
             "slot": int(match.group("slot")) if match.group("slot") else None,
             "voice": (match.group("voice") or "").strip() or None,
@@ -792,6 +807,45 @@ def split_dialogue(text):
             "line": match.group("line").strip(),
         })
     return "\n".join(kept).strip(), events
+
+
+# Two ways a line that was meant to be spoken reaches the model as narration instead:
+#
+#   @ref1 says "hello sir"     no colon, so DIALOGUE_RE never claimed it
+#   @char1 says: hello sir     an alias substitute_char_tags resolves and DIALOGUE_RE does not
+#
+# Both are reported rather than repaired. The colon is the whole rule, and widening it to take
+# quoted text would claim prose that quotes something nobody says out loud.
+#
+# The quoted words have to *end* the line, which is where dialogue puts them — the same place
+# the colon form puts them. That is what separates the near-miss from ordinary prose that
+# happens to quote a thing: `@ref1 reads the sign "Closed" and frowns` carries on afterwards
+# and is left alone. A line that genuinely ends on a quoted noun — `@ref1 points at the sign
+# "CLOSED"` — is still caught, which costs one sentence in the warnings strip and changes
+# nothing about the prompt. A verb list would settle those, and would break on the first
+# prompt written in another language.
+NEAR_MISS_QUOTE_RE = re.compile(
+    u"^@(?:ref|char|character)\\d+[^:\"“«]*[\"“«][^\"”»]+[\"”»][\\s.!?,;]*$",
+    re.IGNORECASE)
+NEAR_MISS_ALIAS_RE = re.compile(r"^@(?:char|character)(\d+)[^:]*:\s*\S", re.IGNORECASE)
+
+
+def near_miss_dialogue(text):
+    """Lines in a shot's prose that read as dialogue but did not become any.
+
+    Returns (line, reason) pairs, `reason` being "colon" or "alias" — enough for the caller to
+    say which rule was missed without this having to know about shot numbering or warnings.
+    """
+    found = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if NEAR_MISS_ALIAS_RE.match(stripped):
+            found.append((stripped, "alias"))
+        elif ":" not in stripped and NEAR_MISS_QUOTE_RE.match(stripped):
+            found.append((stripped, "colon"))
+    return found
 
 
 def shot_has_text(shot):
@@ -804,44 +858,113 @@ def shot_has_text(shot):
     return bool((shot.get("prompt") or "").strip() or shot.get("dialogue"))
 
 
-def assign_speakers(shots, label_for_slot):
-    """Number speakers across the timeline and render each line the way the guide asks.
+def render_event(event, ids, label_for_slot):
+    """One vocal event, numbering any speaker met here for the first time.
 
-    `(Sx)` is assigned once per speaker, in the order vocal events actually occur, and
-    reused at every later event by that speaker — so the same person keeps one ID across
-    cuts, exactly as <Subject N> does. Verbal content carried by reused audio names
-    <Audio N> as its source and gets no ID at all: the guide is explicit that a cue inside
-    a soundtrack has no independent vocal source to number.
+    `(Sx)` is assigned once per speaker, in the order vocal events actually occur, and reused
+    at every later event by that speaker — so the same person keeps one ID across cuts, exactly
+    as <Subject N> does. Verbal content carried by reused audio names <Audio N> as its source
+    and gets no ID at all: the guide is explicit that a cue inside a soundtrack has no
+    independent vocal source to number.
     """
-    ids = {}
-    for shot in shots:
-        render_speakers(shot, ids, label_for_slot)
-    return ids
+    tag = "<d>[%s] %s</d>" % (event["language"], event["line"])
+    if event["audio"]:
+        return "<Audio %d> carries %s" % (event["audio"], tag)
+    if event["slot"]:
+        who = label_for_slot(event["slot"]) or "an unnamed speaker"
+        key = ("slot", event["slot"])
+    else:
+        who = event["voice"] or "an unnamed speaker"
+        key = ("voice", who.strip().lower())
+    if key not in ids:
+        ids[key] = len(ids) + 1
+    return "%s (S%d) %s, %s" % (who, ids[key], event["delivery"], tag)
 
 
-def render_speakers(shot, ids, label_for_slot):
-    """One shot's vocal events, numbering any speaker met here for the first time.
+def join_shot_pieces(parts):
+    """Run a shot's pieces together, supplying the full stop the next one needs.
 
-    Split out of assign_speakers so a caller can interleave it with the prose
-    substitution, shot by shot: which mention of a subject is its *first* depends on the
-    prose and the dialogue together, not on either one read to the end on its own.
+    A piece ending on `</d>` is left alone — the guide continues straight out of a spoken line
+    into the next action, with no punctuation between them.
     """
-    rendered = []
-    for event in shot.get("dialogue") or []:
-        tag = "<d>[%s] %s</d>" % (event["language"], event["line"])
-        if event["audio"]:
-            rendered.append("<Audio %d> carries %s" % (event["audio"], tag))
+    out = ""
+    for part in parts:
+        part = (part or "").strip()
+        if not part:
             continue
-        if event["slot"]:
-            who = label_for_slot(event["slot"]) or "an unnamed speaker"
-            key = ("slot", event["slot"])
+        if not out:
+            out = part
+            continue
+        if not out.endswith((".", "!", "?", ",", ";", ":", DIALOGUE_CLOSE)):
+            out += "."
+        out += " " + part
+    return out
+
+
+def render_shot(shot, values, later=None, seen=None, ids=None, label_for_slot=None):
+    """Resolve one shot's tags and spoken lines, in the order they were written.
+
+    A single pass, because both orderings the guide cares about are properties of the finished
+    shot read left to right: "the first appearance" of a subject, which decides whether it is
+    named in full or by its short name, and "the order of actual vocal events", which decides
+    `(Sx)`. Reading all the prose and then all the dialogue gets both wrong for a shot whose
+    dialogue is not simply trailing — and moves the line, which is worse than either.
+
+    Fills `shot["pieces"]`, ("prose"|"dialogue", text) in written order, and `shot["text"]`,
+    the pieces run together. The pieces are kept so a frame anchor can be placed against the
+    prose instead of after a spoken line.
+    """
+    events = shot.get("dialogue") or []
+    pieces = []
+    # re.split with one group alternates prose, mark, prose, mark, … so odd indices are marks
+    for index, part in enumerate(DIALOGUE_MARK_RE.split(shot.get("prompt") or "")):
+        if index % 2:
+            slot = int(part)
+            text = (render_event(events[slot], ids, label_for_slot)
+                    if 0 <= slot < len(events) else "")
+            kind = "dialogue"
         else:
-            who = event["voice"] or "an unnamed speaker"
-            key = ("voice", who.strip().lower())
-        if key not in ids:
-            ids[key] = len(ids) + 1
-        rendered.append("%s (S%d) %s, %s" % (who, ids[key], event["delivery"], tag))
-    shot["dialogue_text"] = " ".join(rendered)
+            text = substitute_char_tags(part, values, later, seen).strip()
+            kind = "prose"
+        if text:
+            pieces.append((kind, text))
+    shot["pieces"] = pieces
+    shot["text"] = join_shot_pieces([text for _, text in pieces])
+
+
+def apply_speaker_ids(lines, labels, speaker_of_subject):
+    """Fill each voice clip's declaration in with the speaker's global ID.
+
+    The guide asks a bound `<Audio N>` to "reuse that speaker's global ID in the definition":
+    `<Audio 1> is the voice-timbre reference for <Subject 1> (S1).` The ID cannot be known
+    when that sentence is written — speakers are numbered in the order vocal events occur,
+    which is a property of the finished body, not of one declaration — so the line is patched
+    here, once the numbering pass has run.
+
+    A subject that never speaks has no ID and its declaration keeps the label alone, which is
+    still an unambiguous binding. `(Sx)` deliberately does not reach retention_analysis: the
+    guide reserves it for detailed_description, and only these declaration lines are touched.
+    """
+    for entry in labels:
+        subject = entry.get("voice_of")
+        index = entry.get("line_index")
+        if not subject or index is None:
+            continue
+        speaker = speaker_of_subject.get(subject)
+        if not speaker:
+            continue
+        line = lines[index]
+        # a sentence that spells out its own ID is taken as written, the same way
+        # _declaration takes a sentence that opens with its own label
+        if SPEAKER_ID_RE.search(line):
+            continue
+        # A written sentence need not name the subject it was bound to, and an ID attached to
+        # nothing reads as belonging to whoever is named instead. The closing ">" keeps
+        # <Subject 1> from matching inside <Subject 10>.
+        ref = "<Subject %d>" % subject
+        if ref not in line:
+            continue
+        lines[index] = line.replace(ref, "%s (S%d)" % (ref, speaker), 1)
 
 
 ANALYSIS_DESC_PREFIX = "description:"
@@ -902,10 +1025,10 @@ def compile_storyboard(global_prompt, shots, total_seconds):
     written = [s for s in shots if shot_has_text(s)]
 
     # Dialogue was lifted out of the prompt before this format ever saw it, so it has to be
-    # put back or a spoken line would vanish from a comfyui-format prompt entirely.
+    # put back or a spoken line would vanish from a comfyui-format prompt entirely. render_shot
+    # has already done that, in the order it was written.
     def body(shot):
-        parts = [(shot["prompt"] or "").strip(), (shot.get("dialogue_text") or "").strip()]
-        return " ".join(p for p in parts if p)
+        return (shot.get("text") or "").strip()
 
     parts = []
     gp = (global_prompt or "").strip()
@@ -1277,6 +1400,26 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             for slot, subject in subject_of_slot.items():
                 char_tag_values[slot] = "<Subject %d>" % subject
 
+    # A line meant to be spoken that the dialogue rule did not claim, reported before the
+    # tags resolve — afterwards there is no "@ref1" left to point at, only the label it
+    # became. The shot number is the body's, which counts only shots carrying text.
+    near_miss_no = 0
+    for shot in shots:
+        if not shot_has_text(shot):
+            continue
+        near_miss_no += 1
+        for line, reason in near_miss_dialogue(shot["prompt"]):
+            if reason == "alias":
+                ref_warnings.append(
+                    "[Shot %d] `%s` names a subject with @char, which does not speak. Write "
+                    "@ref%s for a spoken line, so it gets a speaker ID and <d>[Language] …</d>."
+                    % (near_miss_no, line, NEAR_MISS_ALIAS_RE.match(line).group(1)))
+            else:
+                ref_warnings.append(
+                    "[Shot %d] `%s` reads as dialogue but has no colon, so it stayed narration "
+                    "— no speaker ID, no <d>[Language] …</d>. Dialogue is `@ref1 <how it is "
+                    "said>: the words`." % (near_miss_no, line))
+
     # Left to right through the finished video — `summary`, then the global block, then
     # each shot in turn, its prose before its dialogue. `seen_slots` is what makes "the
     # first appearance" mean the first one anywhere rather than the first one in this
@@ -1313,9 +1456,17 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
 
     speaker_ids = {}
     for shot in shots:
-        shot["prompt"] = substitute_char_tags(shot["prompt"], char_tag_values,
-                                              char_tag_later, seen_slots)
-        render_speakers(shot, speaker_ids, label_for_slot)
+        render_shot(shot, char_tag_values, char_tag_later, seen_slots, speaker_ids,
+                    label_for_slot)
+
+    # Now that every speaker has an ID, the voice-reference declarations can end the way the
+    # guide ends them. Only the panel-slot speakers map onto subjects — a @voice(…) speaker
+    # has no <Subject N> to be the timbre reference for.
+    speaker_of_subject = {subject_of_slot[slot]: speaker
+                          for (kind, slot), speaker in speaker_ids.items()
+                          if kind == "slot" and slot in subject_of_slot}
+    apply_speaker_ids(subject_lines, ref_labels, speaker_of_subject)
+    slot_of_subject = {subject: slot for slot, subject in subject_of_slot.items()}
 
     # only the minimax format has a detailed_description to measure; the key exists either
     # way so every caller can read it without checking the format first
@@ -1345,7 +1496,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                 continue
             written_no += 1
             # dialogue counts: a subject that only ever speaks still appears in that shot
-            body = "%s %s" % (shot["prompt"] or "", shot.get("dialogue_text") or "")
+            body = shot.get("text") or ""
             for entry in ref_labels:
                 num = entry.get("subject")
                 if num and entry["label"] in body:
@@ -1403,8 +1554,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
         # warning area stops being read at all. Only overshooting the range is called out,
         # where the prompt really has outgrown what the guide describes.
         description_words = len(global_prompt.split()) + sum(
-            len(("%s %s" % (s["prompt"] or "", s.get("dialogue_text") or "")).split())
-            for s in shots if shot_has_text(s))
+            len((s.get("text") or "").split()) for s in shots if shot_has_text(s))
         #
         # Only on the reference path: 350-500 is that guide's figure for its own
         # detailed_description. The base guide gives no word count at all, so citing one
@@ -1423,6 +1573,28 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
             ref_warnings.append(
                 "overall_soundscape is empty; the guide lists it as a required field. "
                 "Describe the ambience, or write N/A if the video is meant to be silent.")
+
+        # The same rule for the field that carries the whole video. Unlike the soundscape
+        # there is no N/A for it: a prompt with no detailed_description has described nothing,
+        # and the section is simply absent from the output rather than visibly empty.
+        if not description_words:
+            ref_warnings.append(
+                "detailed_description is empty; the guide lists it as a required field. "
+                "Write what happens in the global prompt box or on a timeline segment.")
+
+        # A voice-timbre reference for someone who never speaks. The guide's declaration
+        # "reuses the same (Sx) but never assigns a new one independently", so with no vocal
+        # event there is no ID to reuse and the sentence ends on the label — correct, and
+        # baffling if nothing says why.
+        for entry in ref_labels:
+            subject = entry.get("voice_of")
+            if not subject or subject in speaker_of_subject:
+                continue
+            ref_warnings.append(
+                "%s is the voice of <Subject %d>, who has no spoken line, so the guide's "
+                "speaker ID could not be reused in its definition. Write the line as "
+                "`@ref%s says: …` to give them one."
+                % (entry["label"], subject, slot_of_subject.get(subject, "N")))
     else:
         prompt = compile_storyboard(global_prompt, shots, window_seconds)
         if ref_notes:
