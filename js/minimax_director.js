@@ -750,6 +750,8 @@ const STYLES = `
   .mmxd-msel-caret svg { display: block; }
   .mmxd-msel-ic { display: inline-flex; align-items: center; }
   .mmxd-msel-menu { max-height: 60vh; overflow-y: auto; min-width: 120px; }
+  /* group heading inside a menu-select — a label, not a row you can pick */
+  .mmxd-msel-head { padding: 5px 8px 1px 8px; font-size: 9px; font-weight: 700; color: #6f6f6f; letter-spacing: 0.6px; text-transform: uppercase; white-space: nowrap; user-select: none; }
   .mmxd-gap-menu-btn.mmxd-msel-selected { background: #383838; border-color: #555; color: #fff; }
   /* --- Ref-mode toolbar dropdown: green-accent modifier on the menu trigger --- */
   .mmxd-ref-option-select { background: #1e1e1e; border-color: #3a3a3a; border-radius: 6px; height: 28px; font-weight: 500; }
@@ -829,6 +831,13 @@ function createMenuSelect(options, opts) {
     menuEl = document.createElement("div");
     menuEl.className = "mmxd-gap-menu mmxd-msel-menu";
     optList.forEach((o) => {
+      if (o.header) {
+        const h = document.createElement("div");
+        h.className = "mmxd-msel-head";
+        h.textContent = o.label;
+        menuEl.appendChild(h);
+        return;
+      }
       const b = document.createElement("button");
       b.className = "mmxd-gap-menu-btn";
       if (String(o.value) === String(current)) b.classList.add("mmxd-msel-selected");
@@ -13518,26 +13527,58 @@ app.registerExtension({
 
           // ---------- LEFT: Resolution ----------
           const left = mkCol("Resolution");
-          // MiniMax H3's native canvas is a 768 px short edge capped at 768x1344.
-          // Larger canvases work but cost time and leave the trained envelope.
+          // MiniMax H3's native canvas is a 768 px short edge capped at 768x1344, and every
+          // edge here is a multiple of 32: H3's own step, and what divisible_by defaults to,
+          // so a preset is never quietly floored to something else on the way in.
+          // Native holds the 768 short edge except for the two widest ratios, where 1344 is
+          // the long-edge cap and the short edge gives way instead. Fast is the same list at
+          // a 480 short edge.
           //
-          // 1920x1088 is NOT what the model card means by 2K, and calling it that was
-          // misleading (issue #14). The card's 2K comes from H3-Regenerate-2K, a separate
-          // in-context regeneration module that MiniMax has not open-sourced \u2014 "this
-          // module is not yet open-sourced. We will release it once it is ready." What
-          // this preset does is render the base model well past its own canvas, so it is
-          // labelled as what it is.
+          // One entry sits past native, and says so. 1920x1088 is NOT what the model card
+          // means by 2K, and calling it that was misleading (issue #14): the card's 2K comes
+          // from H3-Regenerate-2K, a separate in-context regeneration module that MiniMax
+          // has not open-sourced: "this module is not yet open-sourced. We will release
+          // it once it is ready." What the preset does is render the base model well past
+          // its own canvas, at real cost in time and memory, so it is labelled as what it is
+          // rather than after a module that is not here.
           const RES = [
             { label: "Custom", w: 0, h: 0 },
-            { label: "16:9 native \u2014 1344\u00d7768", w: 1344, h: 768 },
-            { label: "9:16 native \u2014 768\u00d71344", w: 768, h: 1344 },
-            { label: "1:1 native \u2014 992\u00d7992", w: 992, h: 992 },
+            { head: "Native \u2014 768 short edge" },
+            { label: "21:9 \u2014 1344\u00d7576", w: 1344, h: 576 },
+            { label: "2:1 \u2014 1344\u00d7672", w: 1344, h: 672 },
+            { label: "16:9 \u2014 1344\u00d7768", w: 1344, h: 768 },
+            { label: "3:2 \u2014 1152\u00d7768", w: 1152, h: 768 },
+            { label: "4:3 \u2014 1024\u00d7768", w: 1024, h: 768 },
+            { label: "5:4 \u2014 960\u00d7768", w: 960, h: 768 },
+            { label: "1:1 \u2014 992\u00d7992", w: 992, h: 992 },
+            { label: "4:5 \u2014 768\u00d7960", w: 768, h: 960 },
+            { label: "3:4 \u2014 768\u00d71024", w: 768, h: 1024 },
+            { label: "2:3 \u2014 768\u00d71152", w: 768, h: 1152 },
+            { label: "9:16 \u2014 768\u00d71344", w: 768, h: 1344 },
+            { label: "1:2 \u2014 672\u00d71344", w: 672, h: 1344 },
+            { label: "9:21 \u2014 576\u00d71344", w: 576, h: 1344 },
+            { head: "Fast \u2014 480 short edge" },
+            { label: "21:9 fast \u2014 1120\u00d7480", w: 1120, h: 480 },
+            { label: "2:1 fast \u2014 960\u00d7480", w: 960, h: 480 },
             { label: "16:9 fast \u2014 864\u00d7480", w: 864, h: 480 },
+            { label: "3:2 fast \u2014 736\u00d7480", w: 736, h: 480 },
+            { label: "4:3 fast \u2014 640\u00d7480", w: 640, h: 480 },
+            { label: "5:4 fast \u2014 608\u00d7480", w: 608, h: 480 },
+            { label: "1:1 fast \u2014 640\u00d7640", w: 640, h: 640 },
+            { label: "4:5 fast \u2014 480\u00d7608", w: 480, h: 608 },
+            { label: "3:4 fast \u2014 480\u00d7640", w: 480, h: 640 },
+            { label: "2:3 fast \u2014 480\u00d7736", w: 480, h: 736 },
             { label: "9:16 fast \u2014 480\u00d7864", w: 480, h: 864 },
+            { label: "1:2 fast \u2014 480\u00d7960", w: 480, h: 960 },
+            { label: "9:21 fast \u2014 480\u00d71120", w: 480, h: 1120 },
+            { head: "Past native \u2014 outside the trained canvas" },
             { label: "16:9 past native \u2014 1920\u00d71088", w: 1920, h: 1088 },
           ];
           const presetRow = mkRow("Preset");
-          const presetSel = createMenuSelect(RES.map((p, i) => ({ value: String(i), label: p.label })), { width: "126px" });
+          const presetSel = createMenuSelect(
+            RES.map((p, i) => (p.head ? { header: true, label: p.head }
+                                      : { value: String(i), label: p.label })),
+            { width: "126px" });
           presetRow.appendChild(presetSel); left.appendChild(presetRow);
 
           const widthRow = mkRow("Width");
@@ -13552,20 +13593,119 @@ app.registerExtension({
           widthIn.value = wW ? wW.value : 768;
           heightIn.value = hW ? hW.value : 512;
 
+          // The other way round: name a shape and a pixel budget instead of a canvas. The
+          // ratio picks the shape, the megapixel figure picks how much canvas to spend on
+          // it, and the two boxes above are filled with the best pair of /32 edges that
+          // holds the ratio. 1.03 MP is H3's native 1344x768 area, so leaving the budget
+          // where a preset put it and only changing the ratio re-shapes a canvas without
+          // making it cost more. The MP box shows what the snapped edges actually came to,
+          // not what was asked for.
+          const ASPECTS = [
+            { label: "21:9", r: 21 / 9 },
+            { label: "2:1", r: 2 },
+            { label: "16:9", r: 16 / 9 },
+            { label: "3:2", r: 1.5 },
+            { label: "4:3", r: 4 / 3 },
+            { label: "5:4", r: 1.25 },
+            { label: "1:1", r: 1 },
+            { label: "4:5", r: 0.8 },
+            { label: "3:4", r: 0.75 },
+            { label: "2:3", r: 2 / 3 },
+            { label: "9:16", r: 9 / 16 },
+            { label: "1:2", r: 0.5 },
+            { label: "9:21", r: 9 / 21 },
+          ];
+          // Both edges have to be multiples of 32, which usually means no pair holds the
+          // ratio exactly, so pick the best of the four pairs around the ideal one rather
+          // than snapping each edge on its own: snapping independently drifts up to 6% off
+          // ratio, and snapping one and deriving the other drifts differently per
+          // orientation — portrait 9:16 at 1.03 MP gives 768x1376 that way, where landscape
+          // gives H3's own 1344x768.
+          // Ratio error is what the user actually asked about, so it outweighs missing the
+          // budget, and overshooting the budget is penalised twice as hard as undershooting
+          // it: memory is the thing a budget is protecting.
+          const fitAspect = (px, r) => {
+            const edges = (v) => {
+              const f = Math.max(32, Math.floor(v / 32) * 32), c = Math.max(32, Math.ceil(v / 32) * 32);
+              return f === c ? [f] : [f, c];
+            };
+            let best = [768, 768], bestScore = Infinity;
+            for (const w of edges(Math.sqrt(px * r))) {
+              for (const h of edges(Math.sqrt(px / r))) {
+                const score = Math.abs(w / h - r) / r
+                            + (w * h > px ? 0.5 : 0.25) * Math.abs(w * h - px) / px;
+                if (score < bestScore) { bestScore = score; best = [w, h]; }
+              }
+            }
+            return best;
+          };
+          const aspectRow = mkRow("Aspect / MP");
+          const aspectWrap = document.createElement("div");
+          Object.assign(aspectWrap.style, { display: "flex", gap: "4px", alignItems: "center" });
+          // The budget box is the full 86px of the Width and Height boxes, not the frame-rate
+          // row's 48px, so it lines up with them and has room for "0.98" *and* the number
+          // input's spin buttons — which sit on top of right-aligned text rather than beside
+          // it, and clipped the last digit at 48px. The column has the width to spare; the
+          // row runs wider than the others and stays right-aligned with them.
+          const aspSel = createMenuSelect(ASPECTS.map((a, i) => ({ value: String(i), label: a.label })),
+                                          { width: "74px", placeholder: "—" });
+          aspSel.title = "Aspect ratio. Picking one keeps the current pixel budget and "
+                       + "re-shapes the canvas to /32 edges.";
+          const mpIn = document.createElement("input");
+          mpIn.type = "number"; mpIn.step = "0.05"; mpIn.min = "0.01"; mpIn.max = "8"; sIn(mpIn, "86px");
+          mpIn.title = "Pixel budget in megapixels. H3's native canvas is 1.03 MP "
+                     + "(1344x768); past that you are outside its trained envelope.";
+          aspectWrap.appendChild(aspSel); aspectWrap.appendChild(mpIn);
+          aspectRow.appendChild(aspectWrap); left.insertBefore(aspectRow, widthRow);
+
           const syncPreset = () => {
             const cw = parseInt(widthIn.value) || 0, ch = parseInt(heightIn.value) || 0;
             const idx = RES.findIndex(p => p.w === cw && p.h === ch);
             presetSel.value = String(idx > 0 ? idx : 0);
           };
+          const syncAspect = () => {
+            const cw = parseInt(widthIn.value) || 0, ch = parseInt(heightIn.value) || 0;
+            if (cw <= 0 || ch <= 0) { mpIn.value = ""; aspSel.value = ""; return; }
+            mpIn.value = (cw * ch / 1e6).toFixed(2);
+            // 4% is wide enough that the /32 fit always reads back as the ratio it was
+            // picked from — 1344x768 is 1.6% off true 16:9, and the worst fit in the whole
+            // ratio x budget sweep, a 0.25 MP 4:3, is 3.8% — while the nearest ratio wins
+            // regardless, so the closest pair in the list (5:4 and 4:3, 6.7% apart) never
+            // ends up ambiguous.
+            const r = cw / ch;
+            let best = -1, bestErr = 0.04;
+            ASPECTS.forEach((a, i) => {
+              const e = Math.abs(r - a.r) / a.r;
+              if (e < bestErr) { bestErr = e; best = i; }
+            });
+            aspSel.value = best >= 0 ? String(best) : "";
+          };
+          const applyCanvas = (w, h) => {
+            widthIn.value = w; heightIn.value = h;
+            setW("custom_width", w); setW("custom_height", h);
+            syncPreset(); syncAspect();
+          };
+          const applyAspectMp = () => {
+            // Either box on its own is enough. With no ratio picked — the boxes hold a shape
+            // this list does not name, or a preset was never chosen — a budget rescales the
+            // shape that is already there rather than doing nothing; with nothing there at
+            // all, both fall back to H3's native canvas.
+            const a = ASPECTS[parseInt(aspSel.value)];
+            const cw = parseInt(widthIn.value) || 0, ch = parseInt(heightIn.value) || 0;
+            const r = a ? a.r : ((cw > 0 && ch > 0) ? cw / ch : 1344 / 768);
+            let mp = parseFloat(mpIn.value);
+            if (isNaN(mp) || mp <= 0) mp = 1344 * 768 / 1e6;
+            const [w, h] = fitAspect(mp * 1e6, r);
+            applyCanvas(w, h);
+          };
           presetSel.addEventListener("change", () => {
             const p = RES[parseInt(presetSel.value)];
-            if (p && p.w > 0) {
-              widthIn.value = p.w; heightIn.value = p.h;
-              setW("custom_width", p.w); setW("custom_height", p.h);
-            }
+            if (p && p.w > 0) applyCanvas(p.w, p.h);
           });
-          widthIn.addEventListener("change", () => { let v = Math.round(parseFloat(widthIn.value)); if (isNaN(v) || v < 0) v = 0; widthIn.value = v; setW("custom_width", v); syncPreset(); });
-          heightIn.addEventListener("change", () => { let v = Math.round(parseFloat(heightIn.value)); if (isNaN(v) || v < 0) v = 0; heightIn.value = v; setW("custom_height", v); syncPreset(); });
+          aspSel.addEventListener("change", applyAspectMp);
+          mpIn.addEventListener("change", applyAspectMp);
+          widthIn.addEventListener("change", () => { let v = Math.round(parseFloat(widthIn.value)); if (isNaN(v) || v < 0) v = 0; widthIn.value = v; setW("custom_width", v); syncPreset(); syncAspect(); });
+          heightIn.addEventListener("change", () => { let v = Math.round(parseFloat(heightIn.value)); if (isNaN(v) || v < 0) v = 0; heightIn.value = v; setW("custom_height", v); syncPreset(); syncAspect(); });
 
           const FPS = [24, 25, 30, 48, 60];
           const fpsRow = mkRow("Frame rate");
@@ -13579,7 +13719,7 @@ app.registerExtension({
           fpsWrap.appendChild(fpsSel); fpsWrap.appendChild(fpsIn);
           fpsRow.appendChild(fpsWrap); left.appendChild(fpsRow);
 
-          syncPreset(); syncFps();
+          syncPreset(); syncAspect(); syncFps();
 
           // ---- shared seconds<->frames timing infrastructure ----
           const TIME_NAMES = ["start_second", "end_second", "duration_seconds", "start_frame", "end_frame", "duration_frames"];
@@ -13683,7 +13823,7 @@ app.registerExtension({
             if (fr) fpsIn.value = fr.value;
             if (rm && rm.value != null) rmSel.value = rm.value;
             if (rs && rs.value != null) refSel.value = rs.value;
-            syncPreset(); syncFps();
+            syncPreset(); syncAspect(); syncFps();
             if (typeof unitSel !== "undefined" && unitSel) unitSel.value = timeMode();
             timeRefreshers.forEach(fn => fn());
             ensureTimingHidden();
@@ -13710,7 +13850,10 @@ app.registerExtension({
           getValue: () => "",
           setValue: () => { },
         });
-        settingsWidget.computeSize = function () { return [0, 184]; };
+        // Tall enough for the longer of the two columns: Resolution carries six rows since
+        // the aspect/megapixel row joined it, and a DOM widget that is short by a row
+        // clips it rather than scrolling.
+        settingsWidget.computeSize = function () { return [0, 210]; };
         const _mmxOrigOnConfigure = this.onConfigure;
         this.onConfigure = function () {
           if (_mmxOrigOnConfigure) _mmxOrigOnConfigure.apply(this, arguments);

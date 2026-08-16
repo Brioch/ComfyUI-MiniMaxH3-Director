@@ -45,6 +45,10 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
+**Unreleased** — the resolution panel carries a preset for every aspect ratio in H3's
+envelope, in both orientations and two size tiers, or takes a ratio and a megapixel budget
+and works the canvas out for you.
+
 **0.2.1** · 2026-08-16 — **width and height can be wired in** from a resolution node, as
 connection-only inputs beside `start` / `end` / `duration`. The **Analyze** button can now
 reach a cloud endpoint: there is an API-key field, kept in ComfyUI's settings and never in
@@ -307,6 +311,50 @@ pack enforces; see [Longer than 15 seconds](#longer-than-15-seconds). Aspect rat
 module is not yet open-sourced. We will release it once it is ready." The base model's
 canvas is a 768 px short edge. The `1920×1088` preset is therefore labelled *past native*
 — it renders, at real cost in time, outside the canvas the model knows.
+
+### Picking the canvas
+
+Every ratio in that envelope is a **Preset**, in both orientations, at two sizes:
+
+| Ratio | Native | Fast |
+|---|---|---|
+| 21:9 | 1344×576 | 1120×480 |
+| 2:1 | 1344×672 | 960×480 |
+| 16:9 | 1344×768 | 864×480 |
+| 3:2 | 1152×768 | 736×480 |
+| 4:3 | 1024×768 | 640×480 |
+| 5:4 | 960×768 | 608×480 |
+| 1:1 | 992×992 | 640×640 |
+| 4:5 | 768×960 | 480×608 |
+| 3:4 | 768×1024 | 480×640 |
+| 2:3 | 768×1152 | 480×736 |
+| 9:16 | 768×1344 | 480×864 |
+| 1:2 | 672×1344 | 480×960 |
+| 9:21 | 576×1344 | 480×1120 |
+
+**Native** keeps H3's 768 px short edge, except at the two widest ratios, where 1344 is the
+long-edge cap and the short edge gives way instead. **Fast** is the same list at a 480 px
+short edge — 1:1 aside, which stays area-matched to the rest of its tier rather than dropping
+to 480×480. Every edge is a multiple of 32 — H3's own step, and what `divisible_by` defaults
+to — so a preset is never quietly floored to something else on the way in.
+
+One entry sits under its own **Past native** heading: `16:9 — 1920×1088`, which renders
+outside the canvas the model knows and is named for that rather than for a 2K module that is
+not here. It costs time and memory in proportion; everything above it does not.
+
+**Aspect / MP** is the same question from the other end: name a shape and a pixel budget in
+megapixels, and Width and Height are filled with the best pair of /32 edges that holds the
+ratio. Holding the ratio outweighs hitting the budget exactly, and overshooting the budget
+counts against a fit twice as hard as undershooting it, because memory is what a budget is
+protecting — 16:9 at 1.03 MP lands on H3's own 1344×768 rather than the 1376×768 that is
+closer to true 16:9 and 2.6% more canvas. Either box works on its own: a budget with no ratio
+picked rescales the shape already in the boxes, and a ratio with an empty budget uses the
+native 1.03 MP. The MP box shows what the edges came to, not what was asked for.
+
+Typing Width and Height by hand still works — both menus follow along, and read `—` for a
+shape the ratio list does not name. Leave both at 0 and the canvas comes from the first
+timeline image instead, through H3's own policy: 768 short edge, 768×1344 area cap, per-axis
+round to 32.
 
 ### When a reference video runs you out of memory
 
