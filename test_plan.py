@@ -613,7 +613,8 @@ check("nothing written falls back to the generated sentence",
 # <d>[Language] ...</d>; and a cue inside reused audio names <Audio N> with no invented ID.
 prose, spoken = plan.split_dialogue(
     "she jerks her hand back\n@ref1 exclaims with light annoyance: Hey! Watch your dog!")
-check("dialogue is lifted out of the prose", prose, "she jerks her hand back")
+check("dialogue is lifted out of the prose, leaving a mark where it sat", prose,
+      "she jerks her hand back\n" + plan.DIALOGUE_MARK % 0)
 check("the tag, delivery and line are read apart",
       (spoken[0]["slot"], spoken[0]["delivery"], spoken[0]["line"]),
       (1, "exclaims with light annoyance", "Hey! Watch your dog!"))
@@ -666,6 +667,54 @@ check_in("a dialogue-only shot is still numbered and kept",
          "[Shot 2] At 00:05.000, <Subject 1> (S1) whispers, <d>[English] at last</d>",
          only_talk["prompt"])
 
+# A shot is not a paragraph followed by its dialogue. The guide's own Shot 1 goes action,
+# spoken line, more action, so a line written between two paragraphs has to stay between them.
+between = compile(tl([img(0, 288, "a.png",
+                          prompt="@ref1: before mid segment\n\nmid segment\n\n"
+                                 "@ref1: after mid segment")], ref_mode="ON",
+                     global_prompt="global prompt here",
+                     subjects=[{"images": [], "description": "a woman"}]))
+check_in("a spoken line stays where it was written",
+         "[Shot 1] a woman (S1) says, <d>[English] before mid segment</d> mid segment. "
+         "The shot begins from <Picture 1>. a woman (S1) says, "
+         "<d>[English] after mid segment</d>", between["prompt"])
+check("both lines belong to the one speaker",
+      len(set(re.findall(r"\(S\d+\)", between["prompt"]))), 1)
+
+# `</d>` is a closing tag, not the end of a sentence — the guide runs the next action straight
+# out of it. Everything else gets the full stop the next piece needs.
+check("nothing is invented after a spoken line",
+      plan.join_shot_pieces(["she waits", "<d>[English] hello</d>", "she turns away"]),
+      "she waits. <d>[English] hello</d> she turns away")
+check("a piece that already ends on punctuation is left alone",
+      plan.join_shot_pieces(["she waits,", "then turns"]), "she waits, then turns")
+check("empty pieces are dropped rather than punctuated",
+      plan.join_shot_pieces(["", "she waits", "   "]), "she waits")
+
+# Whichever comes first in the shot introduces the subject in full — the "called" name is for
+# every mention after that, and a spoken line is a mention like any other.
+first_seen = compile(tl([{"type": "text", "start": 0, "length": 288,
+                          "prompt": "@ref1: Morning.\n@ref1 wipes the counter"}],
+                        subjects=[{"images": [], "description": "a raspy-voiced baker",
+                                   "shortName": "the baker"}]))
+check_in("a subject introduced by its own spoken line is named in full there",
+         "[Shot 1] a raspy-voiced baker (S1) says, <d>[English] Morning.</d> the baker wipes "
+         "the counter", first_seen["prompt"])
+check_in("and prose that comes first still wins when it does",
+         "[Shot 1] a raspy-voiced baker wipes the counter. the baker (S1) says, "
+         "<d>[English] Morning.</d>",
+         compile(tl([{"type": "text", "start": 0, "length": 288,
+                      "prompt": "@ref1 wipes the counter\n@ref1: Morning."}],
+                    subjects=[{"images": [], "description": "a raspy-voiced baker",
+                               "shortName": "the baker"}]))["prompt"])
+
+check_in("the comfyui format keeps the written order too",
+         "she waits. <Picture 1> (S1) says, <d>[English] hello</d> she turns away",
+         compile(tl([img(0, 288, "a.png", prompt="she waits\n@ref1: hello\nshe turns away")],
+                    ref_mode="ON", prompt_format="comfyui",
+                    subjects=[{"images": [{"b64": "x", "name": "w.png"}],
+                               "description": "a woman"}]))["prompt"])
+
 # guide 5.4: verbal content inside reused audio has no independent vocal source
 bgm = compile(tl([img(0, 240, "a.png", prompt="@audio1: we'll meet again")], ref_mode="ON",
                  audioSegments=[{"audioFile": "song.wav", "start": 0, "length": 240,
@@ -691,6 +740,79 @@ check_in("a speaker ID in a retention note is reported",
                           )["ref_warnings"]))
 check("a clean timeline reports no speaker-ID warning",
       any("(Sx)" in w for w in talk["ref_warnings"]), False)
+
+# A line meant to be spoken that the dialogue rule did not claim. Reported, never repaired:
+# the colon is the rule, and taking quoted text would claim prose that quotes a thing.
+check("a quoted line with no colon is a near-miss",
+      plan.near_miss_dialogue('@ref1 says "hello sir"'),
+      [('@ref1 says "hello sir"', "colon")])
+check("...with the delivery and a language in front of it",
+      bool(plan.near_miss_dialogue('@ref1 [French] murmure "bonjour"')), True)
+check("...and a trailing full stop does not hide it",
+      bool(plan.near_miss_dialogue('@ref1 says "hello sir".')), True)
+check("@char takes a colon and still does not speak",
+      plan.near_miss_dialogue("@char1 says: hello sir"),
+      [("@char1 says: hello sir", "alias")])
+check("prose that quotes a thing and carries on is left alone",
+      plan.near_miss_dialogue('@ref1 reads the sign "Closed" and frowns'), [])
+check("so is a quote followed by more action",
+      plan.near_miss_dialogue('@ref1 says "hello" while @ref1 waves'), [])
+check("so is plain prose", plan.near_miss_dialogue("@ref1 walks to the counter"), [])
+check("so is real dialogue", plan.near_miss_dialogue("@ref1 says: hello sir"), [])
+check("a tag mid-line is not a near-miss either",
+      plan.near_miss_dialogue('she looks at @ref1 and says "hi"'), [])
+
+near = compile(tl([img(0, 144, "a.png", prompt="she waits"),
+                   img(144, 144, "b.png", prompt='@ref1 says "hello sir"')], ref_mode="ON",
+                  subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                             "description": "a woman"}]), duration_f=288)
+check_in("the near-miss names the shot it is in and the shape to write",
+         "[Shot 2] `@ref1 says \"hello sir\"` reads as dialogue but has no colon",
+         " ".join(near["ref_warnings"]))
+check_in("...and says what the line lost by staying prose",
+         "no speaker ID, no <d>[Language] …</d>", " ".join(near["ref_warnings"]))
+check_in("the line itself is untouched", '<Subject 1> says "hello sir"', near["prompt"])
+check("a timeline with real dialogue reports no near-miss",
+      any("reads as dialogue" in w for w in talk["ref_warnings"]), False)
+
+# detailed_description is a required core field in both guides, and unlike the soundscape it
+# has no N/A: the section is simply absent when nothing was written.
+check_in("an empty detailed_description is reported",
+         "detailed_description is empty; the guide lists it as a required field",
+         " ".join(compile(tl([], ref_mode="ON", global_prompt="",
+                             subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                        "description": "a woman"}]))["ref_warnings"]))
+check("a timeline that says something is not nagged about it",
+      any("detailed_description is empty" in w for w in talk["ref_warnings"]), False)
+
+# The declaration "reuses the same (Sx) but never assigns a new one independently", so a
+# subject who never speaks leaves it with nothing to reuse — correct, and baffling unsaid.
+silent_voice = compile(tl([img(0, 288, "a.png", prompt="she waits")], ref_mode="ON",
+                          subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                     "description": "a woman"}],
+                          audioSegments=[{"audioFile": "v.wav", "fileName": "v.wav",
+                                          "start": 0, "length": 288, "subject": 1}]),
+                       use_custom_audio=True)
+check_in("a voice reference for a subject who never speaks is reported",
+         "<Audio 1> is the voice of <Subject 1>, who has no spoken line, so the guide's "
+         "speaker ID could not be reused in its definition. Write the line as "
+         "`@ref1 says: …` to give them one.", " ".join(silent_voice["ref_warnings"]))
+check("...and once they speak, nothing is reported",
+      any("has no spoken line" in w for w in
+          compile(tl([img(0, 288, "a.png", prompt="@ref1 says: hello sir")], ref_mode="ON",
+                     subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                "description": "a woman"}],
+                     audioSegments=[{"audioFile": "v.wav", "fileName": "v.wav",
+                                     "start": 0, "length": 288, "subject": 1}]),
+                  use_custom_audio=True)["ref_warnings"]), False)
+check("an unbound clip is nobody's voice, so there is nothing to report",
+      any("has no spoken line" in w for w in
+          compile(tl([img(0, 288, "a.png", prompt="she waits")], ref_mode="ON",
+                     subjects=[{"images": [{"b64": "x", "name": "c.png"}],
+                                "description": "a woman"}],
+                     audioSegments=[{"audioFile": "v.wav", "fileName": "v.wav",
+                                     "start": 0, "length": 288}]),
+                  use_custom_audio=True)["ref_warnings"]), False)
 # The word count is a figure in the preview badge, not a warning. The guide's 350-500 is a
 # lot for a 5-15s clip, so being under it is the ordinary state here — warning about it
 # fired on essentially every timeline, which is how a warnings area stops being read.
@@ -1161,9 +1283,8 @@ bound = compile(tl([img(0, 288, "a.png", prompt="they talk")], ref_mode="ON",
                 use_custom_audio=True)
 check_in("a clip tied to a subject uses the guide's own sentence",
          "<Audio 1> is the voice-timbre reference for <Subject 2>.", bound["prompt"])
-# the ID is not knowable at declaration time — speakers are numbered in vocal-event order,
-# and this subject may never speak — so the label carries the binding on its own
-check_not_in("no speaker ID is invented for it", "(S", bound["prompt"])
+# a subject who never speaks has no ID to reuse, so the label carries the binding on its own
+check_not_in("a silent subject gets no speaker ID", "(S", bound["prompt"])
 check_in("and the retention line says whose voice it is",
          "<Audio 1> (voice of <Subject 2>): reference - ", bound["prompt"])
 
@@ -1208,6 +1329,62 @@ check("a clip pointing at a slot with no images binds nothing",
       compile(tl([img(0, 288, "a.png", prompt="x")], ref_mode="ON",
                  characters=two_chars, audioSegments=[audio(subject=3)]),
               use_custom_audio=True)["prompt"], False)
+
+# ------------------------------ the declaration reuses the speaker's global ID
+# "When an <Audio N> explicitly corresponds to a target speaker, reuse that speaker's global
+# ID in the definition." The ID is the speaking order, not the subject number — subject 1
+# speaks first here, so the clip bound to subject 2 ends up (S2), which is the guide's own
+# <Subject 3> (S1) case seen from the other side.
+speaks = tl([img(0, 144, "a.png", prompt="@ref1 says: you first"),
+             img(144, 144, "b.png", prompt="@ref2 says: after you")], ref_mode="ON",
+            characters=two_chars, audioSegments=[audio(subject=2)])
+voiced = compile(speaks, use_custom_audio=True)
+check_in("a bound clip ends on the speaker's global ID",
+         "<Audio 1> is the voice-timbre reference for <Subject 2> (S2).", voiced["prompt"])
+check_in("and the same ID is on the spoken line",
+         "<Subject 2> (S2) says, <d>[English] after you</d>", voiced["prompt"])
+check_not_in("the ID still stays out of retention_analysis", "(S",
+             voiced["prompt"].split("retention_analysis:")[1]
+                             .split("detailed_description")[0])
+
+check_in("a copied clip names the ID too",
+         "<Audio 1> carries the voice of <Subject 2> (S2): its signal is reused in the "
+         "target video.",
+         compile(tl([img(0, 144, "a.png", prompt="@ref1 says: you first"),
+                     img(144, 144, "b.png", prompt="@ref2 says: after you")], ref_mode="ON",
+                    characters=two_chars,
+                    audioSegments=[dict(audio(subject=2), retention="fully_copy")]),
+                 use_custom_audio=True)["prompt"])
+
+check_in("a hand-written declaration that names the subject gains the ID",
+         "<Audio 1> is the gravel in the voice of <Subject 2> (S2).",
+         compile(tl([img(0, 144, "a.png", prompt="@ref1 says: you first"),
+                     img(144, 144, "b.png", prompt="@ref2 says: after you")], ref_mode="ON",
+                    characters=two_chars,
+                    audioSegments=[dict(audio(subject=2),
+                                        refDesc="the gravel in the voice of <Subject 2>")]),
+                 use_custom_audio=True)["prompt"])
+check_in("one that writes its own ID is left exactly as typed",
+         "<Audio 1> is the voice-timbre reference for <Subject 2> (S2).",
+         compile(tl([img(0, 144, "a.png", prompt="@ref1 says: you first"),
+                     img(144, 144, "b.png", prompt="@ref2 says: after you")], ref_mode="ON",
+                    characters=two_chars,
+                    audioSegments=[dict(audio(subject=2),
+                                        refDesc="the voice-timbre reference for "
+                                                "<Subject 2> (S2)")]),
+                 use_custom_audio=True)["prompt"])
+check_in("one that names somebody else keeps the ID off it entirely",
+         "<Audio 1> is the room the voices were recorded in.",
+         compile(tl([img(0, 144, "a.png", prompt="@ref1 says: you first")], ref_mode="ON",
+                    characters=two_chars,
+                    audioSegments=[dict(audio(subject=1),
+                                        refDesc="the room the voices were recorded in")]),
+                 use_custom_audio=True)["prompt"])
+check_in("a silent subject is not numbered just because somebody else spoke",
+         "<Audio 1> is the voice-timbre reference for <Subject 2>.\n",
+         compile(tl([img(0, 288, "a.png", prompt="@ref1 says: only me")], ref_mode="ON",
+                    characters=two_chars, audioSegments=[audio(subject=2)]),
+                 use_custom_audio=True)["prompt"])
 
 # ------------------------------------------- a hand-written prompt replaces the text
 base_tl = tl([img(0, 144, "a.png", prompt="she enters"),

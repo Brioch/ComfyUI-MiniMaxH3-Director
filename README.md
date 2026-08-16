@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.2.1-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.2.2-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -33,6 +33,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [Writing it yourself](#writing-it-yourself)
 - [Live preview while sampling](#live-preview-while-sampling)
 - [Writing the prompt for you](#writing-the-prompt-for-you)
+- [Keeping the last frame](#keeping-the-last-frame)
 - [Retake Mode](#retake-mode)
 - [Longer than 15 seconds](#longer-than-15-seconds)
 - [Troubleshooting](#troubleshooting)
@@ -49,6 +50,15 @@ see the exact prompt the model will receive while you are still editing it.
 reference track stretches the output any more, so three 10–15 s audio references park past
 the end and a 5 s render still sends all three. Position decides one thing only: whether an
 audio clip is also part of the muxed soundtrack.
+
+**0.2.2** · 2026-08-16 — a **spoken line stays where it was written** instead of being
+appended to the end of its shot, so first appearance and `(Sx)` follow one order, and a
+voice reference's declaration ends on the speaker ID the guide reuses. The resolution panel
+carries a preset for every aspect ratio in H3's envelope, in both orientations and two size
+tiers, or takes a ratio and a megapixel budget and works the canvas out for you — and a
+cover-cropped timeline image can no longer collapse the canvas to one pixel. New node:
+**Save Last Frame**, which writes the last frame of a batch and passes the batch on
+untouched.
 
 **0.2.1** · 2026-08-16 — **width and height can be wired in** from a resolution node, as
 connection-only inputs beside `start` / `end` / `duration`. The **Analyze** button can now
@@ -112,7 +122,7 @@ can read it before you spend a render on it.
 
 ## What you get
 
-Four nodes, category **MiniMax H3**:
+Five nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
@@ -120,6 +130,7 @@ Four nodes, category **MiniMax H3**:
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
 | **MiniMax H3 Enhance Prompt** | A local vision model writes the prompt from your reference images. |
+| **MiniMax H3 Save Last Frame** | Saves the last frame of a batch and passes the batch on unchanged. |
 
 Editing features carried over from LTX Director: main track, reference-video track, audio
 track, ruler in seconds or frames, drag / resize / copy / paste, prompt zones per segment,
@@ -339,6 +350,50 @@ module is not yet open-sourced. We will release it once it is ready." The base m
 canvas is a 768 px short edge. The `1920×1088` preset is therefore labelled *past native*
 — it renders, at real cost in time, outside the canvas the model knows.
 
+### Picking the canvas
+
+Every ratio in that envelope is a **Preset**, in both orientations, at two sizes:
+
+| Ratio | Native | Fast |
+|---|---|---|
+| 21:9 | 1344×576 | 1120×480 |
+| 2:1 | 1344×672 | 960×480 |
+| 16:9 | 1344×768 | 864×480 |
+| 3:2 | 1152×768 | 736×480 |
+| 4:3 | 1024×768 | 640×480 |
+| 5:4 | 960×768 | 608×480 |
+| 1:1 | 992×992 | 640×640 |
+| 4:5 | 768×960 | 480×608 |
+| 3:4 | 768×1024 | 480×640 |
+| 2:3 | 768×1152 | 480×736 |
+| 9:16 | 768×1344 | 480×864 |
+| 1:2 | 672×1344 | 480×960 |
+| 9:21 | 576×1344 | 480×1120 |
+
+**Native** keeps H3's 768 px short edge, except at the two widest ratios, where 1344 is the
+long-edge cap and the short edge gives way instead. **Fast** is the same list at a 480 px
+short edge — 1:1 aside, which stays area-matched to the rest of its tier rather than dropping
+to 480×480. Every edge is a multiple of 32 — H3's own step, and what `divisible_by` defaults
+to — so a preset is never quietly floored to something else on the way in.
+
+One entry sits under its own **Past native** heading: `16:9 — 1920×1088`, which renders
+outside the canvas the model knows and is named for that rather than for a 2K module that is
+not here. It costs time and memory in proportion; everything above it does not.
+
+**Aspect / MP** is the same question from the other end: name a shape and a pixel budget in
+megapixels, and Width and Height are filled with the best pair of /32 edges that holds the
+ratio. Holding the ratio outweighs hitting the budget exactly, and overshooting the budget
+counts against a fit twice as hard as undershooting it, because memory is what a budget is
+protecting — 16:9 at 1.03 MP lands on H3's own 1344×768 rather than the 1376×768 that is
+closer to true 16:9 and 2.6% more canvas. Either box works on its own: a budget with no ratio
+picked rescales the shape already in the boxes, and a ratio with an empty budget uses the
+native 1.03 MP. The MP box shows what the edges came to, not what was asked for.
+
+Typing Width and Height by hand still works — both menus follow along, and read `—` for a
+shape the ratio list does not name. Leave both at 0 and the canvas comes from the first
+timeline image instead, through H3's own policy: 768 short edge, 768×1344 area cap, per-axis
+round to 32.
+
 ### When a reference video runs you out of memory
 
 A reference video is the most expensive thing you can put on the timeline. Its frames are
@@ -491,8 +546,8 @@ doubled. Paste a whole line that already starts with its label and it is taken a
 
 One such relationship has its own control rather than a box: an audio clip's **Voice of**
 picks a subject, and the declaration becomes the guide's `<Audio 1> is the voice-timbre
-reference for <Subject 1>.` A **describes** line still wins over it, for when the binding
-is not the whole story.
+reference for <Subject 1> (S1).` A **describes** line still wins over it, for when the
+binding is not the whole story.
 
 Frame anchors and storyboard references are the one exception: they have **retained**
 alone. Their declaration states where the image sits in the video (`<Picture 2> is the
@@ -530,6 +585,38 @@ Only a line that *starts* with a tag counts, so prose that merely mentions `@ref
 contains a colon is left alone — the same rule the `Audio:` / `Music:` lines follow. A shot
 whose only content is a spoken line is still a numbered shot.
 
+**The colon is what makes it dialogue**, and quotes are not a substitute:
+
+```
+@ref1 says "hello sir"   →  <Subject 1> says "hello sir".            prose
+@ref1 says: hello sir    →  <Subject 1> (S1) says, <d>[English] hello sir</d>
+```
+
+The first line reaches the model as narration — no speaker ID, no `<d>` tag, and nothing for
+an `<Audio N>` voice reference to reuse. Nothing is silently reinterpreted, because a line
+that quotes something is not always a line somebody speaks, but the preview now says when a
+line reads as dialogue and stayed prose. Dialogue also wants `@refN`: `@char1` and
+`@character1` still resolve to a subject *label* everywhere, but they do not speak, and the
+preview says that too.
+
+**A spoken line stays where you wrote it.** Dialogue is lifted out of the prompt to be
+rendered, then put back in the same place, so a line between two paragraphs stays between
+them — which is how the guide writes a shot: action, the line it motivates, then more action.
+
+```
+@ref1: before mid segment
+mid segment
+@ref1: after mid segment
+
+→ [Shot 1] a woman (S1) says, <d>[English] before mid segment</d> mid segment.
+  a woman (S1) says, <d>[English] after mid segment</d>
+```
+
+Whichever comes first in the shot — prose or a spoken line — is where the subject is named in
+full, and **called** takes over from there. `</d>` closes a tag rather than ending a sentence,
+so the next words run straight out of it with no full stop, exactly as the guide's example
+does.
+
 `<scenetrans>` and `<cutoff>`, for dialogue crossing a cut or speech that is cut short, are
 passed through untouched if you type them.
 
@@ -562,10 +649,14 @@ work away; the tooltip says so.
 
 An **audio clip on the timeline can name whose voice it is**: pick a subject in the clip's
 info panel and the prompt says so in the guide's own words — `<Audio 1> is the voice-timbre
-reference for <Subject 1>.` Leave it unset and the clip stays a general voice reference, as
-before. The guide's own example ends that sentence with a speaker ID, `(S1)`; this does not,
-because IDs are handed out in the order voices are actually heard and a subject with a voice
-reference need never speak. Where the subject does speak, the ID is on the line itself.
+reference for <Subject 1> (S1).` Leave it unset and the clip stays a general voice reference.
+The speaker ID at the end is the subject's global one, so it is the *speaking* order and not
+the subject number: bind the clip to a subject who talks second and the line ends
+`<Subject 2> (S2)`. The guide is firm that this sentence "reuses the same `(Sx)` but never
+assigns a new one independently", so a subject who never speaks has no ID to reuse and the
+sentence ends on the label alone — which still says whose voice the clip is. The preview says
+when that happens, since a voice reference for someone with no line is usually a missing line
+rather than a deliberate choice.
 
 None of that depends on where the clip sits. A clip parked past the render window carries its
 **Voice of** binding, its **describes** line and its marker exactly as one inside it does —
@@ -805,6 +896,27 @@ filtered anyway, because small models do not reliably obey.
 **If the VLM and H3 share a GPU**, the vision model is evicted after each run
 (`unload_after`). Ollama has no per-request device selection, so to put it on a different
 card you set `CUDA_VISIBLE_DEVICES` on the Ollama *service*, not here.
+
+## Keeping the last frame
+
+**MiniMax H3 Save Last Frame** goes straight after `VAEDecode`. It writes the last frame of
+the batch as a PNG — whatever the length — and passes the whole batch on to whatever comes
+next, unchanged.
+
+That frame is the one you reach for: it is the opening keyframe of the next shot, and
+without this node getting at it means a second graph with `ImageFromBatch` wired to a
+`SaveImage`, rebuilt every time the render length changes.
+
+| Widget | |
+|---|---|
+| `save` | Off writes nothing and still passes the frames through, so the node never has to be bypassed between runs. |
+| `filename_prefix` | Under ComfyUI's output folder. The same tokens as Save Image, e.g. `%date:yyyy-MM-dd%`. |
+
+The file, the counter and the embedded workflow metadata are Save Image's own, so a frame
+saved here is a frame Save Image would have written. The IMAGE output is the same tensor
+that came in — the node cannot change what anything downstream decodes, encodes or muxes.
+
+Picking a frame other than the last one is not there yet.
 
 ## Retake Mode
 

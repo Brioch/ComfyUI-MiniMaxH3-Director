@@ -36,6 +36,138 @@
   already did. Parking is what made that worth fixing: a fourth clip out in the shade looks
   exactly as loaded as the three being sent.
 
+## 0.2.2
+
+Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing
+[#20] and [#19] — and a new node.
+
+- **New node: MiniMax H3 Save Last Frame.** It goes straight after `VAEDecode`, writes the
+  last frame of the batch as a PNG the way Save Image would — same counter, same
+  `%date:…%` tokens, same embedded workflow metadata — and passes the batch on. Every H3
+  render ends on a frame worth keeping, since it is the one you feed back in as the next
+  shot's opening keyframe, and fishing it out otherwise meant a second graph with
+  `ImageFromBatch` wired to a `SaveImage`, rebuilt every time the length changed.
+
+  Two things it deliberately does not do. It never touches the pixels: the IMAGE output is
+  the same tensor object that came in, so it cannot change what anything downstream decodes
+  or muxes. And it does not need to be bypassed — `save` is a widget, because a node that
+  has to be disabled between runs is a node that will be left enabled by accident.
+
+- **The resolution panel covers every aspect ratio the model card lists, in both
+  orientations.** Six presets reached 16:9, 9:16 and 1:1; 21:9, 4:3 and 3:4 are in MiniMax's
+  own output envelope and had to be worked out by hand — from an area cap, in multiples of
+  32 — and typed into Width and Height. There are 26, at two sizes:
+
+  | Ratio | Native | Fast |
+  |---|---|---|
+  | 21:9 | 1344×576 | 1120×480 |
+  | 2:1 | 1344×672 | 960×480 |
+  | 16:9 | 1344×768 | 864×480 |
+  | 3:2 | 1152×768 | 736×480 |
+  | 4:3 | 1024×768 | 640×480 |
+  | 5:4 | 960×768 | 608×480 |
+  | 1:1 | 992×992 | 640×640 |
+  | 4:5 | 768×960 | 480×608 |
+  | 3:4 | 768×1024 | 480×640 |
+  | 2:3 | 768×1152 | 480×736 |
+  | 9:16 | 768×1344 | 480×864 |
+  | 1:2 | 672×1344 | 480×960 |
+  | 9:21 | 576×1344 | 480×1120 |
+
+  **Native** keeps H3's 768 px short edge, except at the two widest ratios where 1344 is the
+  long-edge cap and the short edge gives way instead. **Fast** is the same list at a 480 px
+  short edge, 1:1 aside, which stays area-matched to its tier rather than dropping to
+  480×480. Every edge is a multiple of 32 — H3's own step, and what `divisible_by` defaults
+  to — so a preset is never quietly floored to something else on the way in.
+
+  0.2.1's `1920×1088` is still there, under a **Past native** heading of its own, since it
+  is the one canvas here that leaves the trained envelope and the heading is what says so.
+  Everything above it is inside the envelope, so the list no longer mixes the two.
+
+- **Or name a shape and a pixel budget instead of a canvas.** A new **Aspect / MP** row
+  takes an aspect ratio and a figure in megapixels and fills Width and Height with the best
+  pair of /32 edges that holds the ratio. Holding the ratio outweighs hitting the budget
+  exactly, and overshooting the budget is penalised twice as hard as undershooting it, since
+  memory is what a budget is protecting: 16:9 at 1.03 MP lands on H3's own 1344×768 rather
+  than the 1376×768 that is closer to true 16:9 and 2.6% more canvas. Either box works on
+  its own — a budget with no ratio picked rescales the shape already in the boxes — and
+  typing Width and Height by hand still works, with both menus following along and reading
+  `—` for a shape the ratio list does not name.
+
+- **A timeline image no longer collapses the canvas to one pixel.** `resize_image`'s
+  cover-crop sized the scaled image with `int(W * ratio)`, and a ratio that is exact in
+  arithmetic comes back a hair under its integer in floating point — `704 * (480 / 704)` is
+  `479.99999999999994`. The cover then landed one pixel short of the canvas, the centre slice
+  started at −1, and a 1px-wide image came out: a 704×1408 timeline image fitted to 480×640
+  hit the Director's canvas guard as *"the canvas came out 1x640"*, naming a width nothing had
+  asked for. Roughly one source width in nine does this at a 480 px canvas, and the crop is
+  the default fit, so it was reachable from any preset. Rounding rather than truncating — and
+  requiring a cover to be at least the size of what it covers — makes it unreachable.
+
+  The same truncation was quietly costing a whole 32-block in the aspect-preserving methods,
+  where nothing crashed and so nobody looked: **maintain aspect ratio** fitted a 1920×1080
+  image into a 1024×1024 box at 992×544 rather than the 1024×576 the code's own docstring
+  promises.
+
+- **A voice reference's declaration ends on the speaker's global ID**, which is what the
+  guide means by "reuse that speaker's global ID in the definition":
+
+  ```
+  subject_definitions:  <Audio 1> is the voice-timbre reference for <Subject 2> (S2).
+  ```
+
+  The ID is the speaking order rather than the subject number, so it cannot be known when
+  that sentence is written — it is filled in once the numbering pass has walked the finished
+  body. A subject who never speaks has no ID to reuse and the sentence ends on the label,
+  which already says whose voice the clip is. A hand-written declaration gets the same
+  treatment when it names the subject, and is left alone when it writes an ID of its own.
+
+- **A spoken line stays where it was written.** Dialogue is lifted out of a shot prompt to be
+  rendered and was then appended to the end of the shot, which only looked right when the
+  line already came last. A line with prose after it moved:
+
+  ```
+  @ref1: before mid segment          [Shot 1] mid segment. a woman (S1) says,
+  mid segment                    →     <d>[English] before mid segment</d> a woman (S1)
+  @ref1: after mid segment             says, <d>[English] after mid segment</d>
+  ```
+
+  It is now put back where it sat, which is how the guide writes a shot — its own Shot 1 goes
+  action, the line that action motivates, then more action. The same pass decides both
+  orderings the guide cares about, so they can no longer disagree: which mention of a subject
+  is its *first* — and so is named in full rather than by its **called** name — and the order
+  of vocal events that hands out `(Sx)`. A frame anchor still rides with the prose rather than
+  trailing the shot, since a spoken line is not something a shot "begins from". `</d>` no
+  longer picks up a full stop it never needed.
+
+- **The live preview reports a line that reads as dialogue and stayed prose.** The colon is
+  what makes a tagged line dialogue, and `@ref1 says "hello sir"` — the natural thing to
+  type — has none, so it reached the model as narration: no speaker ID, no `<d>[Language]
+  …</d>`, and nothing for an `<Audio N>` voice reference to reuse. The line is not
+  reinterpreted, because prose quotes things nobody says out loud, but it is no longer
+  silent:
+
+  ```
+  [Shot 2] `@ref1 says "hello sir"` reads as dialogue but has no colon, so it stayed
+  narration — no speaker ID, no <d>[Language] …</d>. Dialogue is `@ref1 <how it is said>:
+  the words`.
+  ```
+
+  `@char1 says: hello` is reported the same way: the alias resolves to a subject label
+  everywhere, but only `@refN` speaks.
+
+- **Two required fields are reported when they are empty.** `detailed_description` joins
+  `overall_soundscape`, which was already checked — and unlike the soundscape it has no
+  `N/A`, so an empty one leaves the section out of the prompt entirely rather than visibly
+  blank. A voice reference bound to a subject who never speaks is reported too, naming the
+  tag that would give them a line: the declaration has no `(Sx)` to reuse in that case, which
+  is correct and reads like a bug.
+
+[#16]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/16
+[#17]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/17
+[#19]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/19
+[#20]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/20
+
 ## 0.2.1
 
 Four reports, and one of them was right about something this pack had been saying wrongly
