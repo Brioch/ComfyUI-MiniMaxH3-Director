@@ -302,6 +302,13 @@ being read. Drag the clip back in and it joins `combined_audio` again.
 choices contradict each other: it takes the soundtrack from the reference videos, and a parked
 clip has none to give. That earns a line naming the clips it cannot use.
 
+Override Audio also *replaces* the audio track rather than joining it, which is why the editor
+turns one off when you turn the other on. A workflow can still arrive with both on —
+hand-edited, or driven from another node — and there Override Audio wins and the track's clips
+are not sent: `<Audio j>` numbers each reference video's soundtrack before it reaches a
+standalone clip, so sending both would leave every clip in the prompt labelled as one the model
+was never given. The warnings area names what was left out.
+
 A **retake** keeps the old rule, where the window is a deliberate slice of a video that
 already exists. Outside the marked range there means *another part of that same video*, not
 parked, so a clip out there is not a reference either.

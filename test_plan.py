@@ -1185,6 +1185,29 @@ check("...and says nothing when every clip is inside the window",
                      motionSegments=[vid(0, 0, 96)]),
                   duration_f=120, override_audio=True)["ref_warnings"]), False)
 
+# Override Audio and the audio track cannot both be honoured. Core emits an <Audio j> for
+# each reference video's soundtrack before it reaches the standalone clips, and the labels
+# here are numbered from the track alone — so a clip on the track would be declared as a
+# soundtrack, and a voice binding would name one. The editor keeps the two exclusive; a
+# hand-edited or scripted workflow can still arrive with both, and then Override Audio wins,
+# exactly as it does there.
+both_on = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                     motionSegments=[vid(0, 0, 96)],
+                     audioSegments=[aud(0, 0), aud(1, 360)]),
+                  duration_f=120, use_custom_audio=True, override_audio=True)
+check("Override Audio wins over the audio track", len(both_on["ref_audio_segs"]), 0)
+check_not_in("...so no <Audio N> is left declared", "<Audio 1>", both_on["prompt"])
+check_in("...and the clips that were not sent are named",
+         "clip: 'a0.wav', 'a1.wav'.", " ".join(both_on["ref_warnings"]))
+
+# No reference video means no soundtrack to be numbered first, so nothing can shift and the
+# clips are sent exactly as they are with Override Audio off.
+no_video = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                      audioSegments=[aud(0, 0), aud(1, 360)]),
+                   duration_f=120, use_custom_audio=True, override_audio=True)
+check("Override Audio with no reference video keeps the clips",
+      [s["fileName"] for s in no_video["ref_audio_segs"]], ["a0.wav", "a1.wav"])
+
 # Ordering is still `start`, which is what numbers the labels — parked or not.
 reordered = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
                        audioSegments=[aud(2, 720), aud(0, 0), aud(1, 360)]),

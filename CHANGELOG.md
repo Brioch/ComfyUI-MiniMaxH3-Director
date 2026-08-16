@@ -55,6 +55,17 @@
   was never handed. The log now names the clip, its label, and — for a file that is not in
   the input folder, or a trim that starts past the end of the audio — what went wrong.
 
+- **Override Audio wins over the audio track outside the editor too.** The two are answers to
+  one question, and the editor has always kept them exclusive: turning either on turns the
+  other off. Nothing enforced that on the Python side, so a hand-edited or scripted workflow
+  could arrive with both — and then every audio label in the prompt was wrong, because a
+  reference video's soundtrack is numbered `<Audio 1>` before any clip on the track is
+  reached. A voice binding written for a clip named a soundtrack instead. Override Audio now
+  wins there as well, and the clips it set aside are named in the warnings area. Renumbering
+  around it is not possible from where the prompt is written: a reference video with no audio
+  stream contributes no `<Audio>` label at all, and that is not knowable until the file is
+  opened.
+
 ## 0.2.2
 
 Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing
