@@ -2,6 +2,21 @@
 
 ## 0.2.2
 
+Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing
+[#20] and [#19] — and a new node.
+
+- **New node: MiniMax H3 Save Last Frame.** It goes straight after `VAEDecode`, writes the
+  last frame of the batch as a PNG the way Save Image would — same counter, same
+  `%date:…%` tokens, same embedded workflow metadata — and passes the batch on. Every H3
+  render ends on a frame worth keeping, since it is the one you feed back in as the next
+  shot's opening keyframe, and fishing it out otherwise meant a second graph with
+  `ImageFromBatch` wired to a `SaveImage`, rebuilt every time the length changed.
+
+  Two things it deliberately does not do. It never touches the pixels: the IMAGE output is
+  the same tensor object that came in, so it cannot change what anything downstream decodes
+  or muxes. And it does not need to be bypassed — `save` is a widget, because a node that
+  has to be disabled between runs is a node that will be left enabled by accident.
+
 - **The resolution panel covers every aspect ratio the model card lists, in both
   orientations.** Six presets reached 16:9, 9:16 and 1:1; 21:9, 4:3 and 3:4 are in MiniMax's
   own output envelope and had to be worked out by hand — from an area cap, in multiples of
@@ -111,6 +126,11 @@
   blank. A voice reference bound to a subject who never speaks is reported too, naming the
   tag that would give them a line: the declaration has no `(Sx)` to reuse in that case, which
   is correct and reads like a bug.
+
+[#16]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/16
+[#17]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/pull/17
+[#19]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/19
+[#20]: https://github.com/seesee75-commits/ComfyUI-MiniMaxH3-Director/issues/20
 
 ## 0.2.1
 

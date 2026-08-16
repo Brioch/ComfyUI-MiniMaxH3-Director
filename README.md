@@ -7,7 +7,7 @@ see the exact prompt the model will receive while you are still editing it.
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-%E2%89%A5%200.30.0-1a1a1a)](https://github.com/comfyanonymous/ComfyUI)
-[![version](https://img.shields.io/badge/version-0.2.1-brightgreen)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.2.2-brightgreen)](CHANGELOG.md)
 
 ![The MiniMax H3 Director node](docs/images/director-node.png)
 
@@ -33,6 +33,7 @@ see the exact prompt the model will receive while you are still editing it.
 - [Writing it yourself](#writing-it-yourself)
 - [Live preview while sampling](#live-preview-while-sampling)
 - [Writing the prompt for you](#writing-the-prompt-for-you)
+- [Keeping the last frame](#keeping-the-last-frame)
 - [Retake Mode](#retake-mode)
 - [Longer than 15 seconds](#longer-than-15-seconds)
 - [Troubleshooting](#troubleshooting)
@@ -116,7 +117,7 @@ can read it before you spend a render on it.
 
 ## What you get
 
-Four nodes, category **MiniMax H3**:
+Five nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
@@ -124,6 +125,7 @@ Four nodes, category **MiniMax H3**:
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
 | **MiniMax H3 Enhance Prompt** | A local vision model writes the prompt from your reference images. |
+| **MiniMax H3 Save Last Frame** | Saves the last frame of a batch and passes the batch on unchanged. |
 
 Editing features carried over from LTX Director: main track, reference-video track, audio
 track, ruler in seconds or frames, drag / resize / copy / paste, prompt zones per segment,
@@ -858,6 +860,27 @@ filtered anyway, because small models do not reliably obey.
 **If the VLM and H3 share a GPU**, the vision model is evicted after each run
 (`unload_after`). Ollama has no per-request device selection, so to put it on a different
 card you set `CUDA_VISIBLE_DEVICES` on the Ollama *service*, not here.
+
+## Keeping the last frame
+
+**MiniMax H3 Save Last Frame** goes straight after `VAEDecode`. It writes the last frame of
+the batch as a PNG — whatever the length — and passes the whole batch on to whatever comes
+next, unchanged.
+
+That frame is the one you reach for: it is the opening keyframe of the next shot, and
+without this node getting at it means a second graph with `ImageFromBatch` wired to a
+`SaveImage`, rebuilt every time the render length changes.
+
+| Widget | |
+|---|---|
+| `save` | Off writes nothing and still passes the frames through, so the node never has to be bypassed between runs. |
+| `filename_prefix` | Under ComfyUI's output folder. The same tokens as Save Image, e.g. `%date:yyyy-MM-dd%`. |
+
+The file, the counter and the embedded workflow metadata are Save Image's own, so a frame
+saved here is a frame Save Image would have written. The IMAGE output is the same tensor
+that came in — the node cannot change what anything downstream decodes, encodes or muxes.
+
+Picking a frame other than the last one is not there yet.
 
 ## Retake Mode
 
