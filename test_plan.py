@@ -1430,6 +1430,43 @@ check_in("the comfyui format keeps its own reference-notes line",
          "Reference notes: <Picture 1> is a composition anchor at 0s", cf["prompt"])
 check_not_in("the comfyui format has no minimax sections",
              "subject_definitions:", cf["prompt"])
+
+# issue #14: a slot description had nowhere to go in this format and was simply dropped.
+# It resolves a tag to the bare <Picture N>, so without a declaration the prompt said
+# "<Picture 1> steps out of the doorway" and never once said who that is.
+cf_sub = compile(tl([img(0, 144, "a.png", prompt="@char1 steps out")],
+                    ref_mode="ON", prompt_format="comfyui", characters=chars))
+check_in("a slot description reaches the comfyui format's notes line",
+         "Reference notes: <Subject 1> is a woman in a red coat, shown in <Picture 1>",
+         cf_sub["prompt"])
+check_in("and the shot text still uses the picture label this format resolves to",
+         "<Picture 1> steps out", cf_sub["prompt"])
+check("the subject is declared exactly once", cf_sub["prompt"].count("a woman in a red coat"), 1)
+# subjects come before pictures, so the thing is introduced before the frame that shows it
+cf_both = compile(tl([img(0, 144, "a.png", prompt="@char1 steps out")],
+                     ref_mode="ON", prompt_format="comfyui", characters=chars),
+                  extra_ref_image_count=1, ref_image_notes="the kitchen set")
+check("the subject line comes before the picture line",
+      cf_both["prompt"].index("<Subject 1> is") < cf_both["prompt"].index("is the kitchen set"),
+      True)
+# an undescribed slot falls back to its kind noun here exactly as it does in the minimax
+# format — the two formats say the same thing about the same slot or one of them is lying
+check_in("an undescribed slot falls back to its kind noun",
+         "Reference notes: <Subject 1> is the person shown in <Picture 1>",
+         compile(tl([img(0, 144, "a.png", prompt="x")], ref_mode="ON",
+                    prompt_format="comfyui",
+                    characters=[{"images": [{"b64": "x", "name": "c.png"}]}]))["prompt"])
+# with no slots at all there is no subject line to add
+check_not_in("no slots means no subject line",
+             "<Subject 1>",
+             compile(tl([img(0, 144, "a.png", prompt="x")], ref_mode="ON",
+                        prompt_format="comfyui"))["prompt"])
+# the minimax format is unchanged by all of this — it had the section all along
+check_in("the minimax format still declares the subject in its own section",
+         "subject_definitions:\n<Subject 1> is a woman in a red coat, shown in <Picture 1>.",
+         compile(tl([img(0, 144, "a.png", prompt="@char1 steps out")],
+                    ref_mode="ON", characters=chars))["prompt"])
+
 check("an unknown format falls back to minimax",
       compile(tl([img(0, 144)], prompt_format="nonsense"))["prompt"],
       compile(tl([img(0, 144)], prompt_format="minimax"))["prompt"])

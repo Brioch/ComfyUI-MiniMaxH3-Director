@@ -231,8 +231,10 @@ async def compile_prompt_endpoint(request):
         if p["prompt_is_fallback"]:
             warnings.append("No prompt text on the timeline — 'video' would be sent.")
         if p["length"] > plan.TRAINED_MAX_FRAMES:
-            warnings.append("%.1fs is past H3's trained range (~4-15s). Expect drift or "
-                            "looping — shorten the window." % p["actual_seconds"])
+            # the model card's envelope, not a cap this node enforces (issue #12)
+            warnings.append("%.1fs is past H3's trained range (the model card's 4-15s). It "
+                            "renders, but expect drift or looping, and a render time that "
+                            "climbs faster than the length." % p["actual_seconds"])
         if not p["ref_mode_on"]:
             middles = sum(1 for e in p["events"] if e["role"] == plan.ROLE_MIDDLE)
             if middles:
@@ -505,6 +507,48 @@ def _resolve_provider(data):
     return provider, base_url, model
 
 
+# Env vars tried in order when nothing else supplies a key. The pack-specific one first so
+# a cloud VLM here does not have to share a name with whatever else on the machine reads
+# OPENAI_API_KEY.
+API_KEY_ENV_VARS = ("MINIMAX_DIRECTOR_VLM_API_KEY", "OPENAI_API_KEY")
+
+
+def resolve_api_key(data=None):
+    """Find the bearer token for a cloud endpoint, without ever storing one in a workflow.
+
+    A hosted OpenAI-compatible endpoint needs authentication, and until now nothing here
+    sent any, so `custom` only ever reached a server on the local network (issue #15).
+
+    Where a key may come from, in order:
+
+    1. `api_key` in the request — the Director's gear menu, which keeps it in ComfyUI's
+       user settings. **Not** in `timeline_data`: that is serialised into the workflow
+       JSON, so a key typed there would travel with every workflow the user shares.
+    2. the environment variable named in `api_key_env` — how a node widget asks for a key
+       without carrying one, since widget values *are* saved with the workflow.
+    3. MINIMAX_DIRECTOR_VLM_API_KEY, then OPENAI_API_KEY.
+
+    Returns "" when there is nothing to send, which is the normal case for local Ollama
+    and LM Studio.
+    """
+    data = data or {}
+    key = (data.get("api_key") or "").strip()
+    if key:
+        return key
+    named = (data.get("api_key_env") or "").strip()
+    for var in ([named] if named else []) + list(API_KEY_ENV_VARS):
+        value = (os.environ.get(var) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _auth_headers(api_key):
+    """Bearer header, or nothing at all — an empty Authorization is worse than none."""
+    key = (api_key or "").strip()
+    return {"Authorization": "Bearer %s" % key} if key else None
+
+
 class VLMError(RuntimeError):
     """A VLM round-trip that failed with a message worth showing the user verbatim."""
 
@@ -521,7 +565,8 @@ def strip_thinking(text):
 
 
 async def vlm_generate(images_b64, prompt, provider, base_url, model,
-                       system_prompt=None, timeout=120, keep_alive=0, max_tokens=None):
+                       system_prompt=None, timeout=120, keep_alive=0, max_tokens=None,
+                       api_key=None):
     """One vision-model round-trip, shared by the Analyze endpoint and the Enhance node.
 
     Kept provider-shaped rather than generic on purpose: Ollama takes raw base64 in an
@@ -530,6 +575,9 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
 
     `keep_alive=0` makes Ollama drop the model right after answering, so it is not still
     holding VRAM when H3 starts sampling.
+
+    `api_key` goes out as a bearer token on both paths — hosted Ollama and reverse proxies
+    in front of a local server want one too, and an absent key sends no header at all.
 
     Raises VLMError with a user-facing message; returns the answer with any thinking
     preamble removed.
@@ -540,8 +588,10 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
         raise VLMError("No model name set for %s. Enter the name of the model you have "
                        "loaded there." % provider)
 
+    headers = _auth_headers(api_key)
+
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=headers) as session:
             if provider == "ollama":
                 payload = {"model": model, "prompt": prompt, "images": images_b64,
                            "stream": False, "keep_alive": keep_alive,
@@ -574,6 +624,15 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
                            "stream": False}
                 async with session.post("%s/v1/chat/completions" % base_url, json=payload,
                                         timeout=timeout) as response:
+                    if response.status in (401, 403):
+                        # the one HTTP status worth naming: the fix is somewhere else
+                        # entirely, and the endpoint's own body rarely says where
+                        raise VLMError(
+                            "%s refused the request (HTTP %s)%s. Set an API key in the "
+                            "Analyze settings, or put one in the %s environment variable."
+                            % (provider, response.status,
+                               "" if headers else " and no API key was sent",
+                               API_KEY_ENV_VARS[0]))
                     if response.status != 200:
                         raise VLMError("%s HTTP %s: %s" % (provider, response.status, await response.text()))
                     resp_json = await response.json()
@@ -611,6 +670,7 @@ async def analyze_character_endpoint(request):
         char_index = int(data.get("char_index", 0))
         kind = plan.sanitize_kind(data.get("kind"))
         provider, base_url, model_name = _resolve_provider(data)
+        api_key = resolve_api_key(data)
 
         if provider == "off":
             return web.json_response({"status": "error", "message": "Analyze is set to Off / Manual."})
@@ -622,11 +682,13 @@ async def analyze_character_endpoint(request):
         if not cleaned:
             return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
 
+        # the key itself is never logged, only whether one is going out
         log.info("[MiniMaxDirector] Analyzing reference slot %d (%s) via %s (%s, model "
-                 "'%s')...", char_index + 1, kind, provider, base_url, model_name)
+                 "'%s'%s)...", char_index + 1, kind, provider, base_url, model_name,
+                 ", authenticated" if api_key else "")
         try:
             generated_text = await vlm_generate(cleaned, analyze_prompt(kind), provider,
-                                                base_url, model_name)
+                                                base_url, model_name, api_key=api_key)
         except VLMError as e:
             return web.json_response({"status": "error", "message": str(e)})
 
@@ -639,7 +701,7 @@ async def analyze_character_endpoint(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-async def unload_model(provider, base_url, model):
+async def unload_model(provider, base_url, model, api_key=None):
     """Evict the model from VRAM. Never raises — freeing memory must not fail a render.
 
     Two servers can be asked, by two different protocols:
@@ -653,6 +715,9 @@ async def unload_model(provider, base_url, model):
       `--sleep-idle-seconds`, which nothing here can set remotely.
 
     LM Studio manages residency itself and exposes no unload over HTTP.
+
+    `api_key` is carried through for the same reason the generate call carries it: a
+    server that needs a bearer token to answer needs one to be told to unload as well.
     """
     if not model:
         return False
@@ -661,9 +726,11 @@ async def unload_model(provider, base_url, model):
     except Exception:
         return False
 
+    headers = _auth_headers(api_key)
+
     if provider == "ollama":
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.post("%s/api/generate" % base_url,
                                         json={"model": model, "keep_alive": 0},
                                         timeout=10) as response:
@@ -677,7 +744,7 @@ async def unload_model(provider, base_url, model):
     # Anything else: try the llama.cpp router, and say plainly when it is not there rather
     # than leaving a checkbox that quietly does nothing (issue #9).
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=headers) as session:
             async with session.post("%s/models/unload" % base_url,
                                     json={"model": model}, timeout=10) as response:
                 body = await response.text()
@@ -712,7 +779,7 @@ async def unload_ollama_endpoint(request):
         provider, base_url, model_name = _resolve_provider(data)
         # one code path for every provider, so the gear menu and the Enhance node cannot
         # disagree about what "unload" means
-        freed = await unload_model(provider, base_url, model_name)
+        freed = await unload_model(provider, base_url, model_name, resolve_api_key(data))
         return web.json_response({
             "status": "ok", "provider": provider, "released": freed,
             "note": "" if freed else "server exposes no unload — give it its own idle timeout",
