@@ -45,6 +45,11 @@ see the exact prompt the model will receive while you are still editing it.
 
 ## News
 
+**Unreleased** — a **reference clip no longer has to fit inside the render window**. Neither
+reference track stretches the output any more, so three 10–15 s audio references park past
+the end and a 5 s render still sends all three. Position decides one thing only: whether an
+audio clip is also part of the muxed soundtrack.
+
 **0.2.1** · 2026-08-16 — **width and height can be wired in** from a resolution node, as
 connection-only inputs beside `start` / `end` / `duration`. The **Analyze** button can now
 reach a cloud endpoint: there is an API-key field, kept in ComfyUI's settings and never in
@@ -264,6 +269,32 @@ readable; open them if you want to change sampler, scheduler or steps.
 | **Audio** | music, SFX | `<Audio j>` reference and/or the muxed soundtrack |
 | **Subject slots** | images | `<Subject N>` definitions — people, scenes, props, styles |
 
+### References do not spend output time
+
+A reference is an **input** to the model, not content in the video: `<Video k>` and
+`<Audio j>` are never composited. So neither one has to fit inside the render window, and
+dropping either never stretches the output — only the main track decides how long the video
+is. A clip dropped on one of those two tracks lands after the last one, which for anything
+longer than the window means out in the **shaded area past it**, and it is sent from there.
+
+That is the only way the model card's own numbers work out. It wants each reference audio
+clip 10–15 s long, so three of them need 45 s of track — three times the longest video H3
+can make. Park them and a 5 s render still sends all three.
+
+What the window decides is one thing: whether an audio clip is **also** part of the muxed
+soundtrack. Inside it, a clip is both a reference and sound in the video. Past it, it is a
+reference and nothing else, which the clip's **info panel says when you select it** — not the
+warnings area, because parking is the ordinary case and a warning that fires every time stops
+being read. Drag the clip back in and it joins `combined_audio` again.
+
+**Override Audio** is the one case that does warn, because it is the one place two explicit
+choices contradict each other: it takes the soundtrack from the reference videos, and a parked
+clip has none to give. That earns a line naming the clips it cannot use.
+
+A **retake** keeps the old rule, where the window is a deliberate slice of a video that
+already exists. Outside the marked range there means *another part of that same video*, not
+parked, so a clip out there is not a reference either.
+
 ### Driving it from other nodes
 
 The settings panel owns the canvas and the window, and hides the widgets behind them so
@@ -295,7 +326,7 @@ These are enforced, with a warning naming exactly what was dropped:
 |---|---|
 | Reference images | ≤ 9 — the subject slots *and* the `ref_images` input share this pool |
 | Reference videos | ≤ 3 clips, each 2–15 s, **≤ 15 s total** |
-| Reference audio | ≤ 3 clips |
+| Reference audio | ≤ 3 clips, 10–15 s each is what the card asks for |
 | **All types together** | **≤ 12 files** |
 
 Output envelope: 4–15 s at 24 fps — the range H3 was trained on, and **not** a limit this
@@ -535,6 +566,11 @@ reference for <Subject 1>.` Leave it unset and the clip stays a general voice re
 before. The guide's own example ends that sentence with a speaker ID, `(S1)`; this does not,
 because IDs are handed out in the order voices are actually heard and a subject with a voice
 reference need never speak. Where the subject does speak, the ID is on the line itself.
+
+None of that depends on where the clip sits. A clip parked past the render window carries its
+**Voice of** binding, its **describes** line and its marker exactly as one inside it does —
+[a reference does not spend output time](#references-do-not-spend-output-time). Position
+decides the soundtrack and nothing else.
 
 **Analyze** is optional and off the critical path. It sends the slot image to a vision
 model and pastes back a one-line description, so `@ref1` still means something in

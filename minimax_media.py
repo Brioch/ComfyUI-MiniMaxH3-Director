@@ -1085,7 +1085,16 @@ def build_combined_audio(timeline_data_str: str, start_frame: int, duration_fram
     out = torch.zeros((2, total_samples), dtype=torch.float32)
     file_key = "videoFile" if override_audio else "audioFile"
 
+    # the planner's own test, not a second copy of it — where the window is concerned the
+    # mixdown and the plan have to agree
+    from . import minimax_plan as plan
+
     for seg in audio_segs:
+        # A clip that cannot reach the window contributes nothing, and reference clips are
+        # routinely parked outside it now — so decide that before reading a file
+        # off disk and decoding 15s of it to add zero samples.
+        if not plan.overlaps(seg, start_frame, start_frame + duration_frames):
+            continue
         buffer = None
         if seg.get(file_key):
             path = resolve_input_path(seg[file_key])

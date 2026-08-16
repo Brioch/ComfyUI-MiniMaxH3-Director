@@ -563,7 +563,13 @@ class MiniMaxH3Director(io.ComfyNode):
                 idx = len(ref_videos)
                 seg_start = float(seg.get("start", 0))
                 seg_len = float(seg.get("length", 1))
-                offset = max(0.0, win_start - seg_start)
+                # Only a clip that reaches into the window has a head the window cuts off.
+                # A clip parked outside it goes whole, on its own trim: the window start is
+                # then nothing to do with the clip, and subtracting it would eat the front
+                # of a reference for a reason that has no bearing on it.
+                offset = (max(0.0, win_start - seg_start)
+                          if plan.overlaps(seg, win_start, win_start + duration_frames)
+                          else 0.0)
                 trim = float(seg.get("trimStart", 0)) + offset
                 # The segment's own length is the answer, capped only at the model card's
                 # ceiling. It used to be floored at 2s as well, which meant trimming a clip

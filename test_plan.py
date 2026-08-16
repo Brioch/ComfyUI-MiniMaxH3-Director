@@ -1007,6 +1007,132 @@ check_in("a clip trimmed under 2s is reported, not silently extended",
                              motionSegments=[{"videoFile": "v.mp4", "fileName": "v.mp4",
                                               "start": 0, "length": 24}])
                           )["ref_warnings"]))
+
+# --------------------------- a reference does not have to spend output time
+# The model card wants each reference audio clip 10-15s long. H3's output is 4-15s. Three
+# clips laid end to end therefore cannot fit inside any window it can render, and while a
+# reference had to overlap the window you could have three references or a renderable
+# length, never both. <Video N> and <Audio N> are inputs to the model and are never
+# composited, so where the clip sits decides one thing only: whether an audio clip is
+# *also* part of the muxed soundtrack.
+def aud(i, start, length=360, **extra):
+    seg = {"audioFile": "a%d.wav" % i, "fileName": "a%d.wav" % i,
+           "start": start, "length": length, "audioDurationFrames": length, "trimStart": 0}
+    seg.update(extra)
+    return seg
+
+
+def vid(i, start, length=96, **extra):
+    seg = {"videoFile": "v%d.mp4" % i, "fileName": "v%d.mp4" % i,
+           "start": start, "length": length}
+    seg.update(extra)
+    return seg
+
+
+# three 15s clips end to end, in a 5s window: the issue's own case
+parked = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                    audioSegments=[aud(i, i * 360) for i in range(3)]),
+                 duration_f=120, use_custom_audio=True)
+check("all three reference clips are sent from a 5s window",
+      len(parked["ref_audio_segs"]), 3)
+check("...and the output stays inside H3's trained range",
+      parked["length"] <= plan.TRAINED_MAX_FRAMES, True)
+for n in (1, 2, 3):
+    check_in("<Audio %d> is declared from past the window" % n,
+             "<Audio %d> is a reference audio clip: follow its voice and timbre." % n,
+             parked["prompt"])
+check_in("the task type counts them as references",
+         "audio reference", parked["prompt"])
+# Parking is now the ordinary way to hold a reference, so it must not be nagged about: a
+# warning that fires on every timeline of a kind is how a warnings area stops being read.
+# Which clips reach the soundtrack is said per clip, in the panel, where it is asked for.
+check("a parked clip is not warned about",
+      [w for w in parked["ref_warnings"] if "window" in w], [])
+
+# Override Audio is the exception, because there two explicit choices contradict each other:
+# it takes the soundtrack from the reference videos, and a parked clip cannot supply one.
+check_in("a parked clip that Override Audio was counting on is reported",
+         "Override Audio takes the soundtrack from the reference videos, and these sit past "
+         "the render window, so no part of them reaches combined_audio: 'v1.mp4'.",
+         " ".join(compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                             motionSegments=[vid(0, 0, 96), vid(1, 360, 96)]),
+                          duration_f=120, override_audio=True)["ref_warnings"]))
+check("...and says nothing when every clip is inside the window",
+      any("Override Audio takes" in w for w in
+          compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                     motionSegments=[vid(0, 0, 96)]),
+                  duration_f=120, override_audio=True)["ref_warnings"]), False)
+
+# Ordering is still `start`, which is what numbers the labels — parked or not.
+reordered = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                       audioSegments=[aud(2, 720), aud(0, 0), aud(1, 360)]),
+                    duration_f=120, use_custom_audio=True)
+check("<Audio N> still follows the clip's position on the track",
+      [s["fileName"] for s in reordered["ref_audio_segs"]],
+      ["a0.wav", "a1.wav", "a2.wav"])
+
+# Reference video is the same shape, inside the 15s total budget the model card sets: three
+# 5s clips end to end need 15s of track, which no 5s output could ever have held.
+parked_vid = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                        motionSegments=[vid(i, i * 120, 120) for i in range(3)]),
+                     duration_f=120)
+check("all three reference videos are sent from a 5s window",
+      len(parked_vid["ref_video_segs"]), 3)
+check_in("<Video 3> is declared from past the window", "<Video 3> is a reference video",
+         parked_vid["prompt"])
+# The model card's 15s total is about what the VAE is handed, not about where it sat, so
+# parking does not buy any more of it: three 6s clips still spend 12s and leave the third
+# nothing to fit in.
+budgeted = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                      motionSegments=[vid(i, i * 144, 144) for i in range(3)]),
+                   duration_f=120)
+check("the 15s total budget still applies to parked clips",
+      [s["fileName"] for s in budgeted["ref_video_segs"]], ["v0.mp4", "v1.mp4"])
+check_in("...and still names what it dropped",
+         "Reference videos exceed the 15s total budget; 'v2.mp4' was dropped.",
+         " ".join(budgeted["ref_warnings"]))
+
+# Both per-type caps used to trim in silence. A fourth clip out in the shade looks exactly
+# as loaded as the three being sent, so it has to be named.
+capped_audio = compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                          audioSegments=[aud(i, i * 360) for i in range(4)]),
+                       duration_f=120, use_custom_audio=True)
+check("the fourth audio clip does not reach the model",
+      len(capped_audio["ref_audio_segs"]), plan.MAX_REF_AUDIOS)
+check_in("...and the cap names the clip it dropped",
+         "H3 takes at most 3 reference audio clips; 'a3.wav' was dropped.",
+         " ".join(capped_audio["ref_warnings"]))
+check_in("the video cap names its own casualty",
+         "H3 takes at most 3 reference video clips; 'v3.mp4' was dropped.",
+         " ".join(compile(tl([img(0, 120, "a.png", prompt="she walks")], ref_mode="ON",
+                             motionSegments=[vid(i, i * 120, 120) for i in range(4)]),
+                          duration_f=120)["ref_warnings"]))
+
+# Retake keeps the old rule. There the window is a deliberate sub-range of a video that
+# already exists, so outside it means "another part of this same video", not "parked" — and
+# the editor does not draw the audio track at all.
+retake_parked = plan.plan_timeline(
+    tl([img(0, 480, "a.png", prompt="she walks")], ref_mode="ON", retakeMode=True,
+       retakeVideo={"imageFile": "base.mp4", "videoDurationFrames": 480},
+       retakeStart=48, retakeLength=96,
+       audioSegments=[aud(0, 0, 96), aud(1, 360)]),
+    48, 96, FPS, use_custom_audio=True)
+check("a retake still ignores a clip outside the marked range",
+      [s["fileName"] for s in retake_parked["ref_audio_segs"]], ["a0.wav"])
+
+# Where the clip sits decides the soundtrack and nothing else, so it must not reach the
+# declaration: the same three clips inside the window compile to the same lines they do from
+# out in the shade. That is also what keeps every timeline written before this change intact.
+inside = compile(tl([img(0, 288, "a.png", prompt="she walks")], ref_mode="ON",
+                    audioSegments=[aud(i, 0, 96) for i in range(3)]),
+                 use_custom_audio=True)
+check("position changes nothing about what is declared",
+      [ln for ln in inside["prompt"].split("\n") if ln.startswith("<Audio")],
+      [ln for ln in parked["prompt"].split("\n") if ln.startswith("<Audio")])
+check("...nor the task type it earns",
+      plan.task_type_prefix([], [], inside["ref_audio_segs"]),
+      plan.task_type_prefix([], [], parked["ref_audio_segs"]))
+
 # ------------------------------------------- issue #10: whose voice is <Audio N>?
 two_chars = [{"images": [{"b64": "x", "name": "c1.png"}], "description": "a woman"},
              {"images": [{"b64": "x", "name": "c2.png"}], "description": "a man"}]
