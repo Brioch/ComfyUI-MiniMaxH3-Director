@@ -240,6 +240,14 @@ async def compile_prompt_endpoint(request):
                                 "first and last frame. Switch to 'Refs ON (ref2va)'." % middles)
         if p["ref_mode_on"] and len(p["ref_image_slots"]) >= plan.MAX_REF_IMAGES:
             warnings.append("Reference images are capped at %d." % plan.MAX_REF_IMAGES)
+        # The batch on the ref_images socket only exists once the graph runs, so the
+        # preview cannot number around it. Say so: the alternative is a prompt that shows
+        # <Picture 2> where the render will send <Picture 5>, with nothing to explain why.
+        if (p["ref_mode_on"] and bool(data.get("ref_images_connected"))
+                and not int(data.get("extra_ref_image_count") or 0)):
+            warnings.append(
+                "Images on the ref_images socket are not counted here — every <Picture i> "
+                "below shifts up by that batch size when you render.")
         warnings.extend(p.get("ref_warnings") or [])
 
         return web.json_response({
@@ -250,9 +258,16 @@ async def compile_prompt_endpoint(request):
             "shots": len(p["shots"]),
             "length": p["length"],
             "seconds": round(p["actual_seconds"], 2),
+            # shown in the badge rather than warned about: the guide's 350-500 is a lot of
+            # words for a 5-15s clip, so being under it is the ordinary state here
+            "words": p.get("description_words") or 0,
             "refs": {"images": len(p["ref_image_slots"]),
                      "videos": len(p["ref_video_segs"]),
                      "audios": len(p["ref_audio_segs"])},
+            # slot -> <Subject N>, so the editor's "Voice of" menu can name subjects the way
+            # the prompt does instead of counting slots and getting a different answer
+            "subject_of_slot": {str(k): v for k, v in
+                                (p.get("subject_of_slot") or {}).items()},
             "overridden": bool(p.get("prompt_overridden")),
             # what the timeline would produce, so the panel can offer it back without
             # having to recompile behind the user's back
@@ -262,6 +277,75 @@ async def compile_prompt_endpoint(request):
     except Exception as e:
         log.warning("[MiniMaxDirector] compile_prompt failed: %s", e)
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@PromptServer.instance.routes.post("/minimax_director/probe_video")
+async def probe_video_endpoint(request):
+    """Duration, size and a first frame for a video the browser could not open.
+
+    The editor builds a reference-video segment from a local blob: it needs the duration
+    to size the clip on the timeline and a frame for the thumbnail. That path goes through
+    a <video> element, so it only works for what the browser can decode — and a browser
+    decodes far less than the renderer does. HEVC, ProRes and 10-bit footage inside a
+    perfectly ordinary .mp4 or .mov are all refused by Chrome and all read fine here,
+    because PyAV is what loads reference videos at generation time anyway.
+
+    Without this the editor silently rejected files it would have rendered without
+    complaint. The codec is reported back so a failure can at least name itself.
+    """
+    try:
+        data = await request.json()
+        path = resolve_input_path(data.get("file") or "")
+        if not path:
+            return web.json_response({"status": "error",
+                                      "message": "File not found on the server."})
+
+        with av.open(path) as container:
+            if not container.streams.video:
+                return web.json_response({"status": "error",
+                                          "message": "No video stream in that file."})
+            stream = container.streams.video[0]
+            codec = getattr(stream.codec_context, "name", "") or ""
+            width = stream.width or stream.codec_context.width or 0
+            height = stream.height or stream.codec_context.height or 0
+
+            # Container duration first — a stream's own is missing often enough to matter.
+            duration = 0.0
+            if container.duration:
+                duration = float(container.duration) / av.time_base
+            elif stream.duration and stream.time_base:
+                duration = float(stream.duration * stream.time_base)
+
+            rate = stream.average_rate or stream.guessed_rate
+            fps = float(rate) if rate else 0.0
+
+            # Some containers report no duration at all. Frame count over rate is the
+            # fallback, and it has to be read while the container is still open.
+            if duration <= 0 and fps > 0 and stream.frames:
+                duration = float(stream.frames) / fps
+
+            thumb = ""
+            try:
+                frame = next(container.decode(video=0), None)
+                if frame is not None:
+                    image = frame.to_image()
+                    image.thumbnail((512, 512))
+                    buffer = _io.BytesIO()
+                    image.convert("RGB").save(buffer, format="JPEG", quality=90)
+                    thumb = "data:image/jpeg;base64," + \
+                        base64.b64encode(buffer.getvalue()).decode("ascii")
+            except Exception as e:
+                # a thumbnail is a nicety; the clip is still usable without one
+                log.debug("[MiniMaxDirector] probe thumbnail failed for %s: %s", path, e)
+
+        log.info("[MiniMaxDirector] probed '%s': %s %dx%d, %.2fs @ %.2f fps",
+                 os.path.basename(path), codec or "unknown", width, height, duration, fps)
+        return web.json_response({"status": "success", "duration": round(duration, 3),
+                                  "fps": round(fps, 4), "width": width, "height": height,
+                                  "codec": codec, "thumb": thumb})
+    except Exception as e:
+        log.warning("[MiniMaxDirector] probe_video failed: %s", e)
+        return web.json_response({"status": "error", "message": str(e)})
 
 
 @PromptServer.instance.routes.get("/minimax_director_get_audio")
@@ -360,11 +444,43 @@ _PROVIDER_DEFAULTS = {
     "custom": {"url": "", "model": ""},
 }
 
-_ANALYZE_PROMPT = (
-    "Describe the character's physical appearance in two concise sentences. "
-    "Specify their hair color/style, face details, and their clothing type/color. "
-    "Keep the entire response very brief."
-)
+# What to look at, per subject kind. A slot is not necessarily a character — the reference
+# guide's <Subject N> covers scenes, props, styles and poses too — and asking for hair and
+# clothing when the image is a coffee shop produced exactly the answer you would expect.
+_ANALYZE_SUBJECT = {
+    "person": ("person", "hair colour and style, face, build, and clothing type and colour"),
+    "animal": ("animal", "species, markings, coat, and build"),
+    "object": ("object", "shape, material, colour, and any markings"),
+    "environment": ("place", "architecture, furnishing, materials, and lighting"),
+    "clothing": ("garment", "cut, colour, material, and fastenings"),
+    "prop": ("prop", "shape, material, colour, and signs of wear"),
+    "interface": ("interface", "layout, typography, iconography, and colour"),
+    "effect": ("visual effect", "shape, colour, motion, and how it interacts with the scene"),
+    "style": ("visual style", "palette, contrast, grain, and grade"),
+    "action": ("action", "the movement, its timing, and the body mechanics"),
+    "expression": ("facial expression", "the eyes, mouth, and what it conveys"),
+    "pose": ("pose", "posture, limb placement, and weight distribution"),
+}
+
+
+def analyze_prompt(kind):
+    """Ask the vision model for the slot's two sentences, in labelled lines.
+
+    Two answers, not one: `DESCRIPTION` becomes the `<Subject N>` definition and
+    `RETAINED` becomes its retention_analysis line. They are different sentences in
+    different sections — one says what the thing is, the other says what has to survive
+    into the generated video — and the guide's own example writes both.
+    """
+    noun, look_for = _ANALYZE_SUBJECT.get(kind or "", _ANALYZE_SUBJECT["person"])
+    return (
+        "Look at the reference image(s) of this %s and answer in exactly two lines, "
+        "using these labels and nothing else:\n"
+        "DESCRIPTION: one concise sentence naming the %s.\n"
+        "RETAINED: a short comma-separated list of the specific features that must stay "
+        "identical in a generated video.\n"
+        "Do not add any other text, headings or commentary."
+        % (noun, look_for)
+    )
 
 
 def normalize_base_url(url, fallback=""):
@@ -489,9 +605,11 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
 @PromptServer.instance.routes.post("/minimax_director/analyze_character")
 async def analyze_character_endpoint(request):
     try:
+        from . import minimax_plan as plan
         data = await request.json()
         image_b64 = data.get("image_b64", "")
         char_index = int(data.get("char_index", 0))
+        kind = plan.sanitize_kind(data.get("kind"))
         provider, base_url, model_name = _resolve_provider(data)
 
         if provider == "off":
@@ -504,16 +622,18 @@ async def analyze_character_endpoint(request):
         if not cleaned:
             return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
 
-        log.info("[MiniMaxDirector] Analyzing Character %d via %s (%s, model '%s')...",
-                 char_index + 1, provider, base_url, model_name)
+        log.info("[MiniMaxDirector] Analyzing reference slot %d (%s) via %s (%s, model "
+                 "'%s')...", char_index + 1, kind, provider, base_url, model_name)
         try:
-            generated_text = await vlm_generate(cleaned, _ANALYZE_PROMPT, provider,
+            generated_text = await vlm_generate(cleaned, analyze_prompt(kind), provider,
                                                 base_url, model_name)
         except VLMError as e:
             return web.json_response({"status": "error", "message": str(e)})
 
+        description, retained = plan.split_analysis(generated_text)
         log.info("[MiniMaxDirector] Analysis complete: %s", generated_text)
-        return web.json_response({"status": "success", "description": generated_text})
+        return web.json_response({"status": "success", "description": description,
+                                  "retention_note": retained})
     except Exception as e:
         log.error("[MiniMaxDirector] Failed to analyze character: %s", e)
         return web.json_response({"status": "error", "message": str(e)}, status=500)

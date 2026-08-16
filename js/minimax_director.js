@@ -26,22 +26,28 @@ const MOTION_TRACK_HEIGHT = 80; // used as the Reference Video track height
 const CANVAS_HEIGHT = RULER_HEIGHT + BLOCK_HEIGHT + MOTION_TRACK_HEIGHT + AUDIO_TRACK_HEIGHT;
 const HANDLE_HIT_PX = 14;
 const MIN_SEGMENT_LENGTH = 6;
-// The overall_soundscape / non_diegetic_music strip is docked inside the global prompt
-// box, so the box has to be tall enough for both. MUST match .mmxd-sound-row's height in
-// the stylesheet — the CSS shortens the textarea by exactly this much, and if the two
-// disagree the prompt area either overlaps the strip or leaves a gap.
-const SOUND_ROW_HEIGHT = 54;
+// The overall_soundscape / non_diegetic_music / summary strip sits *beside* the global
+// prompt box as a flex sibling, not inside it. It used to be absolutely positioned on top
+// of the textarea, with the textarea shortened by a hard-coded calc() to make room — so
+// the two fought over the same space and the strip sat on the box's own border. As a flex
+// child the panel divides itself, and these constants only have to reserve node height.
+// The 12px of bottom padding clears the panel's absolutely-positioned drag strip.
+const SOUND_ROW_HEIGHT = 66;   // 50px of field + 4 top + 12 bottom to clear the resizer
 const GLOBAL_PROMPT_MIN_H = 60;                                    // the prompt box alone
 const GLOBAL_PROP_MIN_H = GLOBAL_PROMPT_MIN_H + SOUND_ROW_HEIGHT;  // prompt box + strip
+// The per-reference "describes / retained" strip in the segment properties panel, built
+// the same way. Hiding it with display:none gives the prompt box its height straight back.
+const REF_NOTE_ROW_HEIGHT = 66;
+// start / frames / size for a reference video. Reference frames are VAE-encoded whole and
+// their latents ride through every sampling step, so a long or large clip is the usual
+// cause of an out-of-memory render — and until now the only way to shorten one was to drag
+// its edge on the track, with nothing anywhere saying what it currently was.
+const REF_LIMITS_ROW_HEIGHT = 30;
+const REF_VIDEO_SIZES = [768, 640, 512, 384, 256];   // mirrors minimax_plan.REF_VIDEO_SIZES
+const PROP_MIN_H = 90;                                             // prompt box alone
 const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio", "inpaint_audio", "use_custom_motion", "override_audio"];
-
-// Subject slots. Three was a number baked into the code, not a model limit — the card
-// caps total reference images at 9 and each slot holds 2, so there is room for more.
-const CHAR_SLOTS_DEFAULT = 3;
-const CHAR_SLOTS_MIN = 1;
-const CHAR_SLOTS_MAX = 9;
 
 function hideWidget(w) {
   if (!w) return;
@@ -655,14 +661,21 @@ const STYLES = `
     border-top: 1px solid #333;
     margin: 4px 0;
   }
-  /* --- Character reference slots --- */
-  .mmxd-characters-container { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
-  .mmxd-character-slot { flex: 1; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
+  /* --- Subject reference slots --- */
+  .mmxd-characters-container { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px; margin-top: 6px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  /* grows to nine slots, so they wrap into rows of three rather than shrinking to slivers */
+  /* height is set inline from the dragged panel size — deliberately not duplicated here */
+  .mmxd-character-slot { flex: 1 1 calc(33.333% - 8px); min-width: 120px; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: border-color 0.2s ease, background 0.2s ease; box-sizing: border-box; }
   .mmxd-character-slot:hover { border-color: #666; background: #252525; }
   .mmxd-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
   .mmxd-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
   .mmxd-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
-  .mmxd-character-previews-row { display: flex; width: 100%; height: 52px; gap: 4px; position: relative; }
+  /* the empty slot's drop target: takes the same slack the previews row takes, so the
+     text boxes below it sit at the same height whether or not an image has been dropped */
+  .mmxd-character-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; flex: 1 1 auto; min-height: 44px; pointer-events: none; }
+  .mmxd-character-dropzone .mmxd-character-placeholder { margin-top: 4px; }
+  /* the only part of a slot that flexes, so dragging the panel taller grows the images */
+  .mmxd-character-previews-row { display: flex; width: 100%; flex: 1 1 auto; min-height: 44px; gap: 4px; position: relative; }
   .mmxd-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
   .mmxd-character-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
   .mmxd-character-delete { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, 0.85); color: #ff4444; border: none; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 9px; transition: background 0.15s; z-index: 10; padding: 0; }
@@ -670,9 +683,19 @@ const STYLES = `
   .mmxd-character-validate-btn { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.85); color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: bold; cursor: pointer; transition: all 0.15s; z-index: 20; }
   .mmxd-character-validate-btn:hover { background: #4fff8f; color: #000; border-color: #4fff8f; }
   .mmxd-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
-  .mmxd-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
-  .mmxd-character-desc:focus { border-color: #4fff8f; }
-  /* --- @char autocomplete popup --- */
+  /* Two captioned boxes per slot: what the subject IS, and what has to survive into the
+     target video. Both are fixed height so the previews row above them takes the slack. */
+  .mmxd-character-field { position: relative; width: 100%; flex: 0 0 32px; margin-top: 6px; background: #111; border: 1px solid #333; border-radius: 4px; box-sizing: border-box; z-index: 10; }
+  .mmxd-character-field.mmxd-field-first { margin-top: 10px; }
+  .mmxd-character-field.focus-active { border-color: #4fff8f; }
+  .mmxd-character-field-label { position: absolute; top: 2px; left: 5px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
+  .mmxd-character-desc { position: absolute; top: 12px; left: 0; width: 100%; height: calc(100% - 12px); background: transparent; color: #e0e0e0; border: none; font-size: 9px; line-height: 1.3; resize: none; box-sizing: border-box; padding: 0 4px 2px 4px; outline: none; font-family: inherit; }
+  .mmxd-character-desc::placeholder { color: #4a4a4a; }
+  /* --- per-reference kind / retention controls --- */
+  .mmxd-ref-controls { display: flex; gap: 4px; width: 100%; margin-top: 4px; box-sizing: border-box; }
+  .mmxd-ref-controls .mmxd-msel { flex: 1 1 0; min-width: 0; height: 20px; font-size: 9px; padding: 0 4px 0 6px; }
+  .mmxd-ref-controls .mmxd-msel-caret svg { width: 8px; height: 8px; }
+  /* --- @refN autocomplete popup --- */
   .mmxd-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
   .mmxd-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
   .mmxd-autocomplete-item:hover, .mmxd-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
@@ -697,15 +720,27 @@ const STYLES = `
   /* The wrapper positions its children absolutely, so this row sits at the bottom and
      the prompt area above it is shortened by exactly the same amount. Nothing here
      changes the node's height: the container keeps whatever the user resized it to. */
-  .mmxd-sound-row { position: absolute; bottom: 0; left: 0; width: 100%; height: 54px; display: flex; gap: 6px; padding: 0 8px 6px 8px; box-sizing: border-box; }
-  .mmxd-prompt-area.mmxd-has-sound { height: calc(100% - 20px - 54px); }
+  /* A flex child of the properties panel, not an overlay inside the prompt box. It was
+     absolutely positioned on top of the textarea, which meant the two fought over the
+     same space: the box shrank by a hard-coded calc() and the strip sat on its border. */
+  .mmxd-sound-row { flex: 0 0 66px; width: 100%; display: flex; gap: 6px; padding: 4px 0 12px 0; box-sizing: border-box; }
+  /* same two-field shape as the sound strip, but a flex child of the properties panel
+     rather than a strip docked inside the prompt box — see REF_NOTE_ROW_HEIGHT */
+  .mmxd-ref-note-row { flex: 0 0 66px; width: 100%; display: flex; gap: 6px; padding: 4px 0 12px 0; box-sizing: border-box; }
+  /* start / frames / size for a reference video — the memory levers, see REF_LIMITS_ROW_HEIGHT */
+  .mmxd-ref-limits-row { flex: 0 0 30px; width: 100%; display: flex; align-items: center; gap: 10px; padding: 2px 0 4px 0; box-sizing: border-box; font-size: 10px; color: #8a8a8a; }
+  .mmxd-ref-limits-row label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .mmxd-ref-limits-row input { width: 58px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 3px; padding: 2px 4px; font-size: 10px; font-family: inherit; outline: none; box-sizing: border-box; }
+  .mmxd-ref-limits-row input:focus { border-color: #4fff8f; }
+  .mmxd-ref-limits-row .mmxd-msel { height: 20px; font-size: 10px; padding: 0 4px 0 6px; }
+  .mmxd-ref-limits-note { margin-left: auto; color: #5a5a5a; }
   .mmxd-sound-field { position: relative; flex: 1 1 0; min-width: 0; background: #1c1c1c; border: 1px solid #111; border-radius: 4px; box-sizing: border-box; }
   .mmxd-sound-field.focus-active { border-color: #888; }
   .mmxd-sound-label { position: absolute; top: 3px; left: 6px; font-size: 8px; font-weight: bold; color: #5a5a5a; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; user-select: none; z-index: 5; }
   .mmxd-sound-area { position: absolute; top: 14px; left: 0; width: 100%; height: calc(100% - 14px); background: transparent; color: #d0d0d0; border: none; padding: 0 6px 4px 6px; resize: none; font-size: 11px; line-height: 1.35; font-family: inherit; box-sizing: border-box; outline: none; }
   .mmxd-sound-area::placeholder { color: #4a4a4a; }
-  /* --- subject-slot stepper --- */
-  .mmxd-character-stepper { display: flex; align-items: center; gap: 4px; align-self: center; margin-left: 4px; }
+  /* --- subject-slot stepper: its own row above the slots, never inside their flow --- */
+  .mmxd-character-stepper { display: flex; align-items: center; justify-content: flex-end; gap: 4px; height: 22px; margin-top: 6px; }
   .mmxd-character-step-btn { width: 22px; height: 22px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; background: #2a2a2a; color: #d0d0d0; border: 1px solid #444; border-radius: 4px; font-size: 14px; font-family: inherit; cursor: pointer; padding: 0; }
   .mmxd-character-step-btn:hover { background: #383838; border-color: #666; color: #fff; }
   .mmxd-character-step-count { font-size: 9px; color: #6a6a6a; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; min-width: 56px; text-align: center; }
@@ -805,6 +840,125 @@ function createMenuSelect(options, opts) {
 }
 
 
+// --- Full-reference vocabulary ------------------------------------------------------
+// Mirrors minimax_plan.py, which mirrors the H3 reference guide
+// (skills/h3-prompt-writing/references/ref-en.txt). The retention markers are shown by
+// their own names rather than friendlier ones: the guide calls them "fixed English values
+// in the output format", they are written into the prompt verbatim, and a prettier label
+// would hide which of them you actually picked.
+const MAX_SUBJECT_SLOTS = 9;
+
+const SUBJECT_KIND_OPTIONS = [
+  { value: "person", label: "person" },
+  { value: "animal", label: "animal" },
+  { value: "object", label: "object" },
+  { value: "environment", label: "environment" },
+  { value: "clothing", label: "clothing" },
+  { value: "prop", label: "prop" },
+  { value: "interface", label: "interface" },
+  { value: "effect", label: "visual effect" },
+  { value: "style", label: "style" },
+  { value: "action", label: "action" },
+  { value: "expression", label: "expression" },
+  { value: "pose", label: "pose" },
+];
+
+const RETENTION_OPTIONS = [
+  { value: "fully_preserved", label: "fully_preserved" },
+  { value: "partially_preserved", label: "partially_preserved" },
+  { value: "attribute_transfer", label: "attribute_transfer" },
+  { value: "weak_reference", label: "weak_reference" },
+];
+
+const RETENTION_AUDIO_OPTIONS = [
+  { value: "reference", label: "reference" },
+  { value: "fully_copy", label: "fully_copy" },
+  { value: "partially_copy", label: "partially_copy" },
+  { value: "weak_reference", label: "weak_reference" },
+];
+
+const REF_ROLE_OPTIONS = [
+  { value: "auto", label: "frame anchor" },
+  { value: "storyboard", label: "storyboard" },
+  { value: "subject", label: "defines a subject" },
+];
+
+const RETENTION_TIP =
+  "How closely the model follows this reference (guide 4.1):\n" +
+  "fully_preserved — keep it as defined\n" +
+  "partially_preserved — keep it, but some defined traits change\n" +
+  "attribute_transfer — move its traits onto a different subject\n" +
+  "weak_reference — broad similarity only";
+
+const RETENTION_AUDIO_TIP =
+  "How the reference audio is used (guide 4.2):\n" +
+  "reference — follow its timbre or style, do not copy the signal\n" +
+  "fully_copy — reuse it as the complete final audio track\n" +
+  "partially_copy — copy part of it, add or replace the rest\n" +
+  "weak_reference — broad similarity in category or atmosphere only";
+
+const REF_ROLE_TIP =
+  "What this image is for (guide 2.2):\n" +
+  "frame anchor — it IS a first/last frame or keyframe of its shot\n" +
+  "storyboard — it plans the shot's viewpoint and staging\n" +
+  "defines a subject — it only defines a look, so it gets no <Picture> entry";
+
+// Slots wrap three to a row; the node has to reserve the rows or it crops the last one.
+// The slot height is the user's, dragged from the strip under the panel — the previews
+// row is the only part that flexes, so every pixel gained goes to the images rather than
+// to the text boxes. Unlike SOUND_ROW_HEIGHT there is no matching CSS literal to keep in
+// step: the height is set inline per slot, precisely so there is only one of it.
+// 8 padding + 44 previews + 42 first field + 38 second field + 24 controls
+const SUBJECT_SLOT_MIN_H = 160;
+const SUBJECT_SLOT_DEFAULT_H = 215;
+const SUBJECT_SLOT_GAP = 12;
+const SUBJECT_RESIZER_H = 12;
+const SUBJECT_STEPPER_H = 26;   // the 22px buttons and the gap under them
+function subjectPanelHeight(slotCount, slotHeight) {
+  const rows = Math.max(1, Math.ceil(slotCount / 3));
+  const h = Math.max(SUBJECT_SLOT_MIN_H, slotHeight || SUBJECT_SLOT_DEFAULT_H);
+  return rows * h + (rows - 1) * SUBJECT_SLOT_GAP + 20 + SUBJECT_RESIZER_H
+    + SUBJECT_STEPPER_H;
+}
+
+// The properties panel builds its rows with innerHTML, so text the user typed has to be
+// neutralised on the way in: a description holding a `<` took the row's markup with it.
+function escapeAttr(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+const SUBJECT_SLOTS_DEFAULT = 3;
+function clampSubjectSlots(n) {
+  const v = parseInt(n, 10);
+  return Math.max(1, Math.min(MAX_SUBJECT_SLOTS, v > 0 ? v : SUBJECT_SLOTS_DEFAULT));
+}
+
+function emptySubjectSlot() {
+  return { images: [], description: "", shortName: "", kind: "person",
+           retention: "fully_preserved", retentionNote: "" };
+}
+
+// Old timelines wrote `characters` and had neither kind nor retention. Reading them back
+// with today's defaults reproduces the old wording exactly, so nothing silently changes
+// meaning under an existing workflow.
+function normaliseSubjectSlots(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = list.slice(0, MAX_SUBJECT_SLOTS).map((c) => ({
+    images: Array.isArray(c.images) ? c.images : [],
+    description: c.description || "",
+    shortName: c.shortName || "",
+    kind: SUBJECT_KIND_OPTIONS.some(o => o.value === c.kind) ? c.kind : "person",
+    retention: RETENTION_OPTIONS.some(o => o.value === c.retention)
+      ? c.retention : "fully_preserved",
+    retentionNote: c.retentionNote || "",
+  }));
+  while (out.length < 3) out.push(emptySubjectSlot());
+  return out;
+}
+
+
 // --- Icons ---
 const ICONS = {
   upload: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`,
@@ -863,11 +1017,10 @@ function parseInitial(jsonStr) {
     analyzeProvider: "ollama",
     analyzeBaseUrl: "",
     analyzeModel: "",
-    characters: [
-      { images: [], description: "" },
-      { images: [], description: "" },
-      { images: [], description: "" }
-    ]
+    summary: "",
+    task_type_override: "",
+    subjectSlotCount: SUBJECT_SLOTS_DEFAULT,
+    subjects: normaliseSubjectSlots(null)
   };
   try {
     if (jsonStr) {
@@ -903,20 +1056,30 @@ function parseInitial(jsonStr) {
       if (p.analyzeProvider !== undefined) parsed.analyzeProvider = p.analyzeProvider;
       if (p.analyzeBaseUrl !== undefined) parsed.analyzeBaseUrl = p.analyzeBaseUrl;
       if (p.analyzeModel !== undefined) parsed.analyzeModel = p.analyzeModel;
-      if (Array.isArray(p.characters)) {
-        parsed.characters = p.characters.map(c => ({
-          images: Array.isArray(c.images) ? c.images : [],
-          description: c.description || ""
-        }));
-        // pad up to the default, never truncate — a workflow saved with more slots keeps
-        // every one of them
-        while (parsed.characters.length < CHAR_SLOTS_DEFAULT) {
-          parsed.characters.push({ images: [], description: "" });
-        }
+      if (p.summary !== undefined) parsed.summary = p.summary || "";
+      if (p.subjectSlotCount !== undefined) {
+        parsed.subjectSlotCount = clampSubjectSlots(p.subjectSlotCount);
+      } else if (Array.isArray(p.subjects) || Array.isArray(p.characters)) {
+        // saved before the count was stored: the slots themselves are all it left behind
+        parsed.subjectSlotCount =
+          clampSubjectSlots((p.subjects || p.characters).length);
+      }
+      if (p.task_type_override !== undefined) {
+        parsed.task_type_override = p.task_type_override || "";
+      }
+      // `subjects` is the current key; `characters` is the same panel's old one. A
+      // timeline saved before subject kinds existed reads back with today's defaults,
+      // which reproduce the wording it was written against.
+      if (Array.isArray(p.subjects) || Array.isArray(p.characters)) {
+        parsed.subjects = normaliseSubjectSlots(p.subjects || p.characters);
       }
       if (Array.isArray(p.segments)) {
         parsed.segments = p.segments.map(s => {
-          const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
+          // `isAnchor` is dropped rather than carried: the Image Anchor was an LTX
+          // concept this node never read, so an old timeline's flag is inert and would
+          // otherwise ride along in the JSON forever. Such a segment becomes an ordinary
+          // image with an empty prompt, which is what it already compiled to.
+          const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, isAnchor, ...rest } = s;
           return rest;
         });
       }
@@ -934,6 +1097,18 @@ function parseInitial(jsonStr) {
       }
     }
   } catch (e) { }
+
+  // A slot with something in it must never be hidden by the count saved beside it: the
+  // planner reads the slots, so its images would still be sent with no box on screen to
+  // show them. Only ever raises, and only here — while editing, the stepper is the one
+  // writer. It fires for a hand-edited or third-party timeline, not for one this saves.
+  let lastUsed = 0;
+  (parsed.subjects || []).forEach((s, i) => {
+    if ((s.images && s.images.length) || (s.description || "").trim()) lastUsed = i + 1;
+  });
+  if (lastUsed > parsed.subjectSlotCount) {
+    parsed.subjectSlotCount = clampSubjectSlots(lastUsed);
+  }
 
   let currentStart = 0;
   for (let seg of parsed.segments) {
@@ -2491,6 +2666,12 @@ class TimelineEditor {
     refOptionSelect.addEventListener("change", (e) => {
       this.timeline.reference_mode = e.target.value;
       this.commitChanges();
+      // the describes/retained strip only exists in ref2va, so it has to appear and
+      // disappear with the switch rather than waiting for the next selection change —
+      // and the subject panel swaps `retained` for `called` on the same switch
+      this.updateUIFromSelection();
+      this.updateCharacterSlotsUI();
+      this._syncSummaryField();
     });
     this.refOptionSelect = refOptionSelect;
 
@@ -2994,7 +3175,8 @@ class TimelineEditor {
     const globalPromptWrapper = document.createElement("div");
     globalPromptWrapper.className = "mmxd-prompt-wrapper";
     globalPromptWrapper.style.width = "100%";
-    globalPromptWrapper.style.height = "100%";
+    globalPromptWrapper.style.flex = "1 1 auto";
+    globalPromptWrapper.style.minHeight = "0";
 
     this.globalPromptLabel = document.createElement("div");
     this.globalPromptLabel.className = "mmxd-prompt-label";
@@ -3002,7 +3184,7 @@ class TimelineEditor {
     globalPromptWrapper.appendChild(this.globalPromptLabel);
 
     this.globalPromptInput = document.createElement("textarea");
-    this.globalPromptInput.className = "mmxd-prompt-area mmxd-has-sound";
+    this.globalPromptInput.className = "mmxd-prompt-area";
     this.globalPromptInput.placeholder =
       "Enter global prompt here...  (Audio: / Music: lines are lifted into the two boxes below)";
     this.globalPromptInput.spellcheck = true;
@@ -3083,7 +3265,17 @@ class TimelineEditor {
     this.musicInput = makeSoundField(
       "non_diegetic_music", "non_diegetic_music",
       "Score only the audience hears. Name instrumentation, tempo and dynamics, or write N/A.");
-    globalPromptWrapper.appendChild(soundRow);
+    // The reference guide's own section, and the one place the [task type] prefix can
+    // hang. Same field pattern as the two above for the same reason: one value, read by
+    // both the node and the live preview, with no second copy to fall out of step.
+    this.summaryInput = makeSoundField(
+      "summary", "summary",
+      "One paragraph on the target video and what each reference is for. The [task type] prefix is added for you.");
+    // ...and only the reference guide has it. The base guide's structure is closed —
+    // the alignment instruction, then three required core fields — so with refs off the
+    // box would offer a section the prompt cannot carry. The text is kept either way.
+    this.summaryField = this.summaryInput.parentElement;
+    this._syncSummaryField();
 
     this.globalPromptInput.addEventListener("input", (e) => {
       const val = e.target.value;
@@ -3155,6 +3347,7 @@ class TimelineEditor {
     });
 
     globalPropContainer.appendChild(globalPromptWrapper);
+    globalPropContainer.appendChild(soundRow);
     globalPropContainer.appendChild(globalPropResizer);
 
     const propResizer = document.createElement("div");
@@ -3180,7 +3373,7 @@ class TimelineEditor {
           stopDrag();
           return;
         }
-        const newH = Math.max(90, startH + (ev.clientY - startY));
+        const newH = Math.max(this._propMinH(), startH + (ev.clientY - startY));
         this.propHeight = newH;
         this.node.properties.propHeight = newH;
         propContainer.style.height = `${newH}px`;
@@ -3209,7 +3402,10 @@ class TimelineEditor {
     this.promptWrapper = document.createElement("div");
     this.promptWrapper.className = "mmxd-prompt-wrapper";
     this.promptWrapper.style.width = "100%";
-    this.promptWrapper.style.height = "100%";
+    // flex rather than height:100% so the reference-note strip below can take its own
+    // room when it is shown, and give it straight back when it is hidden
+    this.promptWrapper.style.flex = "1 1 auto";
+    this.promptWrapper.style.minHeight = "0";
     this.promptWrapper.style.display = "none";
 
     this.segmentPromptLabel = document.createElement("div");
@@ -3239,8 +3435,6 @@ class TimelineEditor {
         return;
       }
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-        // Anchors never own a prompt — ignore any input against them.
-        if (this.timeline.segments[this.selectedIndex].isAnchor) return;
         this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
         this.commitChanges();
       } else if (this.selectionType === "motion") {
@@ -3266,9 +3460,150 @@ class TimelineEditor {
     this.audioInfoArea = document.createElement("div");
     this.audioInfoArea.className = "mmxd-audio-info";
 
+    // --- Reference note strip -------------------------------------------------------
+    // Sits in propContainer beside the prompt box rather than inside it, because the
+    // audio branch of updateUIFromSelection hides promptWrapper outright — and an audio
+    // clip is exactly one of the references that needs a retention note.
+    this.refNoteRow = document.createElement("div");
+    this.refNoteRow.className = "mmxd-ref-note-row";
+    this.refNoteRow.style.display = "none";
+
+    const makeRefNoteField = (label, placeholder) => {
+      const field = document.createElement("div");
+      field.className = "mmxd-sound-field";
+
+      const cap = document.createElement("div");
+      cap.className = "mmxd-sound-label";
+      cap.textContent = label;
+      field.appendChild(cap);
+
+      const area = document.createElement("textarea");
+      area.className = "mmxd-sound-area";
+      area.placeholder = placeholder;
+      area.spellcheck = true;
+      area.addEventListener("focus", () => {
+        field.classList.add("focus-active");
+        this.wrapper.classList.add("has-focus");
+      });
+      area.addEventListener("blur", () => {
+        field.classList.remove("focus-active");
+        this.wrapper.classList.remove("has-focus");
+      });
+      field.appendChild(area);
+      this.refNoteRow.appendChild(field);
+      return { field, area };
+    };
+
+    const descField = makeRefNoteField(
+      "describes", "what this image defines, e.g. a long red wool coat");
+    const noteField = makeRefNoteField(
+      "retained", "what survives into the video — leave empty for the default");
+    this.refDescField = descField.field;
+    this.refDescInput = descField.area;
+    this.refNoteInput = noteField.area;
+
+    // Write to the timeline array, never to the segment object the selection handed us:
+    // while a drag is in flight that is a preview clone and the edit would be discarded.
+    const writeRefText = (key, value) => {
+      const list = this.getSegmentArray(this.selectionType);
+      const target = list && list[this.selectedIndex];
+      if (!target) return;
+      target[key] = value;
+      this.commitChanges(true);
+      if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+    };
+    this.refDescInput.addEventListener("input",
+      () => writeRefText("refDesc", this.refDescInput.value));
+    this.refNoteInput.addEventListener("input",
+      () => writeRefText("refNote", this.refNoteInput.value));
+
+    // --- Reference video limits ------------------------------------------------------
+    // The two numbers that decide how much of a clip is encoded, and the resolution it is
+    // encoded at. They edit the segment's own trim and length rather than shadowing them,
+    // so the track keeps showing exactly what will be sent.
+    this.refLimitsRow = document.createElement("div");
+    this.refLimitsRow.className = "mmxd-ref-limits-row";
+    this.refLimitsRow.style.display = "none";
+
+    const limitField = (caption, title, onCommit) => {
+      const label = document.createElement("label");
+      label.textContent = caption;
+      label.title = title;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "0";
+      input.step = "1";
+      input.title = title;
+      const commit = () => {
+        const list = this.getSegmentArray(this.selectionType);
+        const target = list && list[this.selectedIndex];
+        if (!target) return;
+        onCommit(target, Math.max(0, Math.round(parseFloat(input.value) || 0)));
+        this.commitChanges(true);
+        this.render();
+        this.updateUIFromSelection();
+        if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+      };
+      input.addEventListener("change", commit);
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();                       // the canvas eats arrows and Delete
+        if (e.key === "Enter") input.blur();
+      });
+      label.appendChild(input);
+      this.refLimitsRow.appendChild(label);
+      return input;
+    };
+
+    this.refStartInput = limitField("start", "First frame taken from the source clip.",
+      (seg, value) => {
+        const source = seg.videoDurationFrames || 0;
+        seg.trimStart = source ? Math.min(value, Math.max(0, source - 1)) : value;
+        // never let the trim run past the end of the source
+        if (source) seg.length = Math.max(1, Math.min(seg.length, source - seg.trimStart));
+      });
+
+    this.refFramesInput = limitField("frames",
+      "How many frames are encoded. Fewer frames is less memory, and at 24 fps this is "
+      + "the clip's length in the video.",
+      (seg, value) => {
+        const source = seg.videoDurationFrames || 0;
+        let next = Math.max(1, value);
+        if (source) next = Math.min(next, Math.max(1, source - (seg.trimStart || 0)));
+        // stop short of the next clip on the track rather than overlapping it
+        const later = (this.timeline.motionSegments || [])
+          .filter(s => s.id !== seg.id && s.start > seg.start)
+          .sort((a, b) => a.start - b.start)[0];
+        if (later) next = Math.min(next, Math.max(1, later.start - seg.start));
+        seg.length = next;
+      });
+
+    this.refSizeSelect = createMenuSelect(
+      REF_VIDEO_SIZES.map(v => ({ value: String(v), label: `${v}px` })), { width: "76px" });
+    this.refSizeSelect.title =
+      "Short edge the clip is decoded at. Memory goes with the square of this, so it is "
+      + "the biggest lever on an out-of-memory render — 384 is about a quarter of 768.";
+    this.refSizeSelect.addEventListener("change", () => {
+      const list = this.getSegmentArray(this.selectionType);
+      const target = list && list[this.selectedIndex];
+      if (!target) return;
+      target.refSize = parseInt(this.refSizeSelect.value, 10);
+      this.commitChanges(true);
+    });
+    const sizeLabel = document.createElement("label");
+    sizeLabel.textContent = "size";
+    sizeLabel.appendChild(this.refSizeSelect);
+    this.refLimitsRow.appendChild(sizeLabel);
+
+    this.refLimitsNote = document.createElement("span");
+    this.refLimitsNote.className = "mmxd-ref-limits-note";
+    this.refLimitsRow.appendChild(this.refLimitsNote);
+
     propContainer.appendChild(this.promptWrapper);
     propContainer.appendChild(this.motionInfoArea);
     propContainer.appendChild(this.audioInfoArea);
+    propContainer.appendChild(this.refLimitsRow);
+    propContainer.appendChild(this.refNoteRow);
     propContainer.appendChild(propResizer);
 
     this.wrapper.addEventListener("dragover", (e) => {
@@ -4045,10 +4380,10 @@ class TimelineEditor {
     this.wrapper.appendChild(propContainer);
     this.wrapper.appendChild(this.globalPropContainer);
 
-    // --- Character reference slots (3 @char panels) at the bottom of the editor ---
+    // --- Subject reference slots (@refN panels) at the bottom of the editor ---
     this.createCharacterSlots(this.wrapper);
 
-    // --- @char autocomplete on both prompt fields ---
+    // --- @refN autocomplete on both prompt fields ---
     if (this.globalPromptInput) this.setupAutocomplete(this.globalPromptInput);
     if (this.promptInput) this.setupAutocomplete(this.promptInput);
 
@@ -4056,6 +4391,8 @@ class TimelineEditor {
     if (this.refOptionSelect) {
       this.refOptionSelect.value = this.timeline.reference_mode || "OFF";
     }
+    // and everything else the switch governs, for a workflow restored on the fl2va path
+    this._syncSummaryField();
 
     this.container.appendChild(this.wrapper);
   }
@@ -4219,8 +4556,7 @@ class TimelineEditor {
   }
 
   // --- Async Image Upload Logic (Handles multiple images simultaneously) ---
-  async handleImageUpload(files, targetFrameStart = null, explicitLength = null, opts = {}) {
-    const isAnchorUpload = !!opts.isAnchor;
+  async handleImageUpload(files, targetFrameStart = null, explicitLength = null) {
     const frameRate = this.getFrameRate();
     const durationFrames = this.getDurationFrames();
     const newLength = explicitLength !== null ? explicitLength : frameRate * 1; // Default to 1 second long
@@ -4302,11 +4638,6 @@ class TimelineEditor {
               length: constrainedLength,
               prompt: "",
               type: "image",
-              // Image Anchor: a guide-only keyframe. It is inserted into the latent
-              // exactly like a normal image guide (same guideStrength path), but it is
-              // EXCLUDED from the prompt-relay sync — it borrows the previous segment's
-              // prompt instead of owning one. See commitChanges() and the draw block.
-              isAnchor: isAnchorUpload,
               imageFile: imageFile,
               imageB64: imgUrl
             };
@@ -4757,145 +5088,200 @@ class TimelineEditor {
 
     for (let file of files) {
       if (!(file.type.startsWith("video/") || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/))) continue;
+      const placed = await this._loadMotionFile(file, frameRate, targetFrameStart);
+      if (placed && targetFrameStart !== null) targetFrameStart = placed.nextStart;
+    }
+  }
 
-      await new Promise(async (resolve) => {
-        try {
-          // Load from local blob immediately — no waiting for server upload
-          const blobUrl = URL.createObjectURL(file);
+  // Positioning, segment creation and insertion — shared by the two ways a reference video
+  // can arrive: decoded by the browser, or described by the server when the browser will
+  // not touch it. One copy on purpose; the paths differ only in where the duration and the
+  // thumbnail came from.
+  _insertMotionSegment({ file, clipFrames, thumbB64, videoEl, blobUrl, videoFile,
+                         targetFrameStart }) {
+    const newLength = clipFrames;
+    let newStart = targetFrameStart;
 
-          const vid = document.createElement('video');
-          vid.crossOrigin = "Anonymous";
-          vid.preload = 'auto';
-          vid.muted = true;
-          vid.onerror = (e) => { console.error("Motion video load error", e); URL.revokeObjectURL(blobUrl); resolve(); };
+    if (newStart === null || newStart === undefined) {
+      newStart = 0;
+      this.timeline.motionSegments.sort((a, b) => a.start - b.start);
+      for (let i = 0; i < this.timeline.motionSegments.length; i++) {
+        const s = this.timeline.motionSegments[i];
+        if (newStart + newLength <= s.start) break;
+        newStart = Math.max(newStart, s.start + s.length);
+      }
+    } else {
+      const currentDuration = this.getVisualDurationFrames();
+      const tempId = "TEMP_" + Date.now();
+      this.timeline.motionSegments.push({ id: tempId, start: newStart, length: newLength, type: "temp" });
+      const result = this._applyCenterDragPhysics(this.timeline.motionSegments, tempId, newStart, newStart + newLength / 2, currentDuration, currentDuration, 1);
+      for (const shiftedSeg of result) {
+        const original = this.timeline.motionSegments.find(s => s.id === shiftedSeg.id);
+        if (original) original.start = shiftedSeg.resolvedStart !== undefined ? shiftedSeg.resolvedStart : shiftedSeg.start;
+      }
+      const tempSeg = this.timeline.motionSegments.find(s => s.id === tempId);
+      newStart = tempSeg.start;
+      this.timeline.motionSegments = this.timeline.motionSegments.filter(s => s.id !== tempId);
+    }
 
-          vid.onloadeddata = () => {
-            vid.onloadeddata = null; // prevent re-firing if src changes or browser buffers more data
-            const clipDurationSecs = vid.duration || 1;
-            const clipFrames = Math.max(1, Math.ceil(clipDurationSecs * frameRate));
-            let newLength = clipFrames;
-            let newStart = targetFrameStart;
+    const seg = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+      type: "motion_video",
+      start: newStart,
+      length: newLength,
+      trimStart: 0,
+      videoDurationFrames: clipFrames,
+      videoFile: videoFile || "",   // filled in later when the upload runs in background
+      fileName: file.name,
+      videoStrength: 1.0,
+      videoAttentionStrength: 0.65,
+      resampleMode: "nearest",
+      previewThumbs: [],
+      previewThumbSourceFrames: clipFrames,
+      fileSize: file.size
+    };
+    if (videoEl) seg.videoEl = videoEl;
+    if (blobUrl) seg._blobUrl = blobUrl;
+    if (!videoFile) seg._uploading = true;
 
-            if (newStart === null) {
-              newStart = 0;
-              this.timeline.motionSegments.sort((a, b) => a.start - b.start);
-              for (let i = 0; i < this.timeline.motionSegments.length; i++) {
-                let s = this.timeline.motionSegments[i];
-                if (newStart + newLength <= s.start) break;
-                newStart = Math.max(newStart, s.start + s.length);
-              }
-            }
+    if (thumbB64) {
+      seg.imageB64 = thumbB64;
+      const imgObj = new Image();
+      imgObj.onload = () => { seg.imgObj = imgObj; this.render(); };
+      imgObj.src = thumbB64;
+    }
 
-            const currentDuration = this.getVisualDurationFrames();
-            if (targetFrameStart !== null) {
-              let tempId = "TEMP_" + Date.now();
-              this.timeline.motionSegments.push({ id: tempId, start: newStart, length: newLength, type: "temp" });
-              let result = this._applyCenterDragPhysics(this.timeline.motionSegments, tempId, newStart, newStart + newLength / 2, currentDuration, currentDuration, 1);
-              for (let shiftedSeg of result) {
-                let original = this.timeline.motionSegments.find(s => s.id === shiftedSeg.id);
-                if (original) original.start = shiftedSeg.resolvedStart !== undefined ? shiftedSeg.resolvedStart : shiftedSeg.start;
-              }
-              let tempSeg = this.timeline.motionSegments.find(s => s.id === tempId);
-              newStart = tempSeg.start;
-              this.timeline.motionSegments = this.timeline.motionSegments.filter(s => s.id !== tempId);
-              targetFrameStart = newStart + newLength;
-            }
+    this.timeline.motionSegments.push(seg);
+    this.timeline.motionSegments.sort((a, b) => a.start - b.start);
 
-            const seg = {
-              id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-              type: "motion_video",
-              start: newStart,
-              length: newLength,
-              trimStart: 0,
-              videoDurationFrames: clipFrames,
-              videoFile: "",  // filled in once background upload completes
-              fileName: file.name,
-              videoStrength: 1.0,
-              videoAttentionStrength: 0.65,
-              resampleMode: "nearest",
-              previewThumbs: [],
-              previewThumbSourceFrames: clipFrames,
-              videoEl: vid,
-              _uploading: true,
-              _blobUrl: blobUrl,
-              fileSize: file.size
-            };
+    if (!this.retakeMode) {
+      this.growTimelineIfNeeded(seg.start + seg.length);
+    }
 
-            vid.currentTime = 0.01;
-            vid.onseeked = () => {
-              vid.onseeked = null;
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.min(vid.videoWidth, 512);
-              canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
-              seg.imageB64 = canvas.toDataURL('image/jpeg');
+    this.selectionType = "motion";
+    this.selectedIndex = this.timeline.motionSegments.findIndex(s => s.id === seg.id);
+    this.updateUIFromSelection();
+    this.commitChanges(true);
+    this.render();
+    return { seg, nextStart: newStart + newLength };
+  }
 
-              const imgObj = new Image();
-              imgObj.onload = () => { seg.imgObj = imgObj; this.render(); };
-              imgObj.src = seg.imageB64;
-
-              // Add to timeline immediately
-              this.timeline.motionSegments.push(seg);
-              this.timeline.motionSegments.sort((a, b) => a.start - b.start);
-
-              if (!this.retakeMode) {
-                this.growTimelineIfNeeded(seg.start + seg.length);
-              }
-
-              this.selectionType = "motion";
-              this.selectedIndex = this.timeline.motionSegments.findIndex(s => s.id === seg.id);
-              this.updateUIFromSelection();
-              this.commitChanges(true);
-              resolve(); // resolve immediately — don't block on upload
-              this._ensureThumbnails(seg);
-
-              // Background upload — runs while the user can already work.
-              // We intentionally do NOT change vid.src after upload — the blob URL
-              // works perfectly for local playback. Only videoFile needs updating
-              // so Python can find the file at generation time.
-              this._uploadVideoFile(file).then(filePath => {
-                for (let s of this.timeline.motionSegments) {
-                  if (s._blobUrl === blobUrl || s.id === seg.id) {
-                    s.videoFile = filePath;
-                    s._uploading = false;
-                  }
-                }
-                if (blobUrl && filePath) {
-                  this._thumbnailCache = this._thumbnailCache || new Map();
-                  this._thumbnailPromises = this._thumbnailPromises || new Map();
-                  if (this._thumbnailCache.has(blobUrl)) {
-                    this._thumbnailCache.set(filePath, this._thumbnailCache.get(blobUrl));
-                  }
-                  if (this._thumbnailPromises.has(blobUrl)) {
-                    this._thumbnailPromises.set(filePath, this._thumbnailPromises.get(blobUrl));
-                  }
-                }
-                const isOverrideAudio = !!(this.node.properties.overrideAudio || this.timeline.overrideAudio);
-                if (isOverrideAudio) {
-                  const s = this.timeline.motionSegments.find(s => s.id === seg.id);
-                  if (s) {
-                    this._preloadMotionAudioSegment(s);
-                  }
-                }
-                this.commitChanges(true);
-                this.render();
-              }).catch(err => {
-                console.error("[MiniMaxDirector] Background motion video upload failed", err);
-                const currentSeg = this.timeline.motionSegments.find(s => s.id === seg.id);
-                if (currentSeg) currentSeg._uploading = false;
-                this.render();
-              });
-            };
-          };
-
-          vid.src = blobUrl;
-
-        } catch (err) {
-          console.error("[MiniMaxDirector] Motion video processing failed", err);
-          resolve();
+  // Upload in the background so the clip is usable the moment it lands on the track.
+  _finishMotionUpload(seg, file, blobUrl) {
+    this._uploadVideoFile(file).then(filePath => {
+      for (const s of this.timeline.motionSegments) {
+        if (s._blobUrl === blobUrl || s.id === seg.id) {
+          s.videoFile = filePath;
+          s._uploading = false;
         }
+      }
+      if (blobUrl && filePath) {
+        this._thumbnailCache = this._thumbnailCache || new Map();
+        this._thumbnailPromises = this._thumbnailPromises || new Map();
+        if (this._thumbnailCache.has(blobUrl)) {
+          this._thumbnailCache.set(filePath, this._thumbnailCache.get(blobUrl));
+        }
+        if (this._thumbnailPromises.has(blobUrl)) {
+          this._thumbnailPromises.set(filePath, this._thumbnailPromises.get(blobUrl));
+        }
+      }
+      const isOverrideAudio = !!(this.node.properties.overrideAudio || this.timeline.overrideAudio);
+      if (isOverrideAudio) {
+        const s = this.timeline.motionSegments.find(s => s.id === seg.id);
+        if (s) this._preloadMotionAudioSegment(s);
+      }
+      this.commitChanges(true);
+      this.render();
+    }).catch(err => {
+      console.error("[MiniMaxDirector] Background motion video upload failed", err);
+      const currentSeg = this.timeline.motionSegments.find(s => s.id === seg.id);
+      if (currentSeg) currentSeg._uploading = false;
+      this.render();
+    });
+  }
+
+  // Try the browser first — a local blob shows the clip instantly, with no upload to wait
+  // on. If the browser will not decode it, fall back to the server rather than giving up.
+  _loadMotionFile(file, frameRate, targetFrameStart) {
+    return new Promise((resolve) => {
+      const blobUrl = URL.createObjectURL(file);
+      const vid = document.createElement('video');
+      vid.crossOrigin = "Anonymous";
+      vid.preload = 'auto';
+      vid.muted = true;
+
+      let settled = false;
+      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+
+      vid.onerror = () => {
+        // Chrome refuses plenty of codecs the renderer reads without complaint — HEVC,
+        // ProRes and 10-bit footage all live inside perfectly ordinary .mp4 and .mov
+        // files. This used to log to the console and stop, so picking such a file did
+        // nothing at all and never said why.
+        URL.revokeObjectURL(blobUrl);
+        this._placeMotionViaServer(file, frameRate, targetFrameStart).then(done);
+      };
+
+      vid.onloadeddata = () => {
+        vid.onloadeddata = null;   // browsers re-fire this as more data buffers
+        const clipFrames = Math.max(1, Math.ceil((vid.duration || 1) * frameRate));
+
+        vid.currentTime = 0.01;
+        vid.onseeked = () => {
+          vid.onseeked = null;
+          let thumb = "";
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(vid.videoWidth, 512);
+            canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
+            canvas.getContext('2d').drawImage(vid, 0, 0, canvas.width, canvas.height);
+            thumb = canvas.toDataURL('image/jpeg');
+          } catch (e) {
+            console.warn("[MiniMaxDirector] could not grab a thumbnail frame", e);
+          }
+
+          const { seg, nextStart } = this._insertMotionSegment({
+            file, clipFrames, thumbB64: thumb, videoEl: vid, blobUrl, targetFrameStart });
+          done({ nextStart });               // never block on the upload
+          this._ensureThumbnails(seg);
+          this._finishMotionUpload(seg, file, blobUrl);
+        };
+      };
+
+      vid.src = blobUrl;
+    });
+  }
+
+  // The file has to be uploaded before it can be probed, so this path is slower than the
+  // blob one — but it accepts everything the renderer accepts, which is the point.
+  async _placeMotionViaServer(file, frameRate, targetFrameStart) {
+    try {
+      const videoFile = await this._uploadVideoFile(file);
+      if (!videoFile) throw new Error("the upload did not complete");
+
+      const resp = await api.fetchApi("/minimax_director/probe_video", {
+        method: "POST", body: JSON.stringify({ file: videoFile }),
       });
+      const d = await resp.json();
+      if (d.status !== "success") throw new Error(d.message || "the server could not read it");
+      if (!d.duration) throw new Error("the file reports no duration");
+
+      const clipFrames = Math.max(1, Math.ceil(d.duration * frameRate));
+      const { seg, nextStart } = this._insertMotionSegment({
+        file, clipFrames, thumbB64: d.thumb || "", videoFile, targetFrameStart });
+      console.info(`[MiniMaxDirector] '${file.name}' (${d.codec || "unknown codec"}) could `
+        + `not be decoded by the browser; the server read it instead.`);
+      // deliberately no _ensureThumbnails here: the filmstrip is extracted through a
+      // <video> element too, so it would fail the same way. The frame the server sent is
+      // already on the segment.
+      return { nextStart };
+    } catch (err) {
+      console.error("[MiniMaxDirector] reference video could not be read", err);
+      alert(`Could not add "${file.name}".\n\n`
+        + `${err.message || err}\n\n`
+        + `The browser cannot decode this file and the server could not read it either. `
+        + `Re-encoding to H.264 in an MP4 container usually fixes it.`);
+      return null;
     }
   }
 
@@ -5651,6 +6037,90 @@ class TimelineEditor {
     }
   }
 
+  // The properties panel has to hold the prompt box *and*, when a reference is selected,
+  // the note strip. Without this the default 90px panel would leave the prompt box 24px.
+  _propMinH() {
+    const notes = this.refNoteRow && this.refNoteRow.style.display !== "none";
+    const limits = this.refLimitsRow && this.refLimitsRow.style.display !== "none";
+    return PROP_MIN_H + (notes ? REF_NOTE_ROW_HEIGHT : 0)
+                      + (limits ? REF_LIMITS_ROW_HEIGHT : 0);
+  }
+
+  // The reference-video limits, shown only for a clip on the reference-video track.
+  // Frames and start edit the segment itself, so the track keeps showing what will be sent.
+  _syncRefLimitsRow(seg) {
+    if (!this.refLimitsRow) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    if (!seg || this.selectionType !== "motion" || !refsOn || this.retakeMode) {
+      this.refLimitsRow.style.display = "none";
+      return;
+    }
+    this.refLimitsRow.style.display = "flex";
+
+    const fps = this.getFrameRate() || 24;
+    const frames = Math.max(1, Math.round(seg.length || 1));
+    this.refStartInput.value = Math.max(0, Math.round(seg.trimStart || 0));
+    this.refFramesInput.value = frames;
+    this.refSizeSelect.value = String(seg.refSize || REF_VIDEO_SIZES[0]);
+
+    // What this clip actually costs, in the terms that matter: seconds against the model
+    // card's 2-15s window, and whether it is the one blowing the memory budget.
+    const secs = frames / fps;
+    const parts = [`${secs.toFixed(1)}s`];
+    if (secs < 2) parts.push("under the 2s minimum");
+    else if (secs > 15) parts.push("over the 15s maximum");
+    this.refLimitsNote.textContent = parts.join(" · ");
+    this.refLimitsNote.style.color = (secs < 2 || secs > 15) ? "#d08a3a" : "#5a5a5a";
+  }
+
+  // Opens the panel far enough that showing the strip does not squeeze the prompt box to
+  // nothing. Only ever grows — a panel the user has already dragged taller is left alone.
+  _growPropForRefNote() {
+    const min = this._propMinH();
+    if (!this.propContainer || this.propHeight >= min) return;
+    this.propHeight = min;
+    if (this.node?.properties) this.node.properties.propHeight = min;
+    this.propContainer.style.height = `${min}px`;
+    if (this.node?.setDirtyCanvas && typeof this.node.computeSize === "function"
+        && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
+  }
+
+  // Shows the describes/retained strip for whichever reference is selected, and fills it.
+  // Hidden entirely with refs off: with no <Subject>/<Picture>/<Video>/<Audio> labels in
+  // the prompt there is nothing for either sentence to attach to.
+  _syncRefNoteRow(seg) {
+    if (!this.refNoteRow) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    const isRef = !!seg && (
+      this.selectionType === "motion" || this.selectionType === "audio" ||
+      (this.selectionType === "image" && (seg.type === "image" || seg.type === "video")));
+
+    if (!refsOn || !isRef || this.retakeMode) {
+      this.refNoteRow.style.display = "none";
+      return;
+    }
+    this.refNoteRow.style.display = "flex";
+    this._growPropForRefNote();
+
+    // `describes` writes the reference's line in subject_definitions. A frame or
+    // storyboard anchor is the exception: its declaration states where the image sits in
+    // the video, which the timeline already knows and the user should not contradict.
+    const describes = this.selectionType !== "image" || seg.refRole === "subject";
+    this.refDescField.style.display = describes ? "" : "none";
+    if (describes) this.refDescInput.value = seg.refDesc || "";
+    this.refDescInput.placeholder = {
+      audio: "e.g. the voice-timbre reference for <Subject 1>",
+      motion: "e.g. the source of the camera move and cut rhythm",
+    }[this.selectionType] || "what this image defines, e.g. a long red wool coat";
+    this.refNoteInput.value = seg.refNote || "";
+    this.refNoteInput.placeholder = this.selectionType === "audio"
+      ? "what the target keeps from this audio — leave empty for the default"
+      : "what survives into the video — leave empty for the default";
+  }
+
   updateUIFromSelection() {
     if (this.selectedSegmentIds && this.isMultiSelectActive()) {
       if (this.globalPromptInput) {
@@ -5699,6 +6169,10 @@ class TimelineEditor {
       if (this.segmentBoundsDisplay) {
         this.segmentBoundsDisplay.textContent = "Multiple Segments Selected";
       }
+      // there is no single reference to annotate, and leaving these up would show the
+      // previously selected segment's values as if they belonged to this selection
+      this._syncRefLimitsRow(null);
+      this._syncRefNoteRow(null);
       return;
     }
 
@@ -5745,6 +6219,11 @@ class TimelineEditor {
       this.promptInput.placeholder = "";
       this.promptInput.style.opacity = "";
     }
+
+    // Set once here rather than in each branch below: these belong to the selected
+    // segment, not to whichever of the prompt box / motion info / audio info is on show.
+    this._syncRefLimitsRow(seg);
+    this._syncRefNoteRow(seg);
 
     if (this.retakeMode) {
       if (this.promptWrapper) this.promptWrapper.style.display = "block";
@@ -5795,16 +6274,9 @@ class TimelineEditor {
       // "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." — and without
       // somewhere to say it, a second voice reference is just another numbered clip with
       // no way to tell the model who is speaking (issue #10).
-      const chars = this.timeline.characters || [];
-      const options = ['<option value="">— not a specific subject —</option>'].concat(
-        chars.map((c, i) => {
-          const desc = (c.description || "").trim();
-          const label = desc ? `Subject ${i + 1} — ${desc.slice(0, 40)}` : `Subject ${i + 1}`;
-          const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
-          return `<option value="${i + 1}"${sel}>${label}</option>`;
-        })).join("");
+      const options = this._audioSubjectOptions(seg);
       this.audioInfoArea.innerHTML = `
-        File: <span>${seg.fileName || "Unknown"}</span><br>
+        File: <span>${escapeAttr(seg.fileName || "Unknown")}</span><br>
         Length: <span>${this.formatTime(seg.audioDurationFrames)}</span> Output Length: <span>${this.formatTime(seg.length)}</span><br>
         Trim-in: <span>${this.formatTime(Math.round(seg.trimStart))}</span> Trim-Out: <span>${this.formatTime(Math.round(seg.audioDurationFrames - (seg.trimStart + seg.length)))}</span><br>
         <label class="mmxd-audio-subject-label">Voice of:
@@ -5874,16 +6346,13 @@ class TimelineEditor {
       this.vidAttnValue.style.display = "none";
 
       if (seg) {
-        const isAnchorSeg = !!seg.isAnchor;
         if (this.selectionType !== "motion") {
-          this.promptInput.value = isAnchorSeg ? "" : (seg.prompt || "");
-          this.promptInput.placeholder = isAnchorSeg
-            ? "Image Anchor — no prompt (inherits the previous segment)"
-            : "Enter prompt for selected segment...";
+          this.promptInput.value = seg.prompt || "";
+          this.promptInput.placeholder =
+            "Enter prompt for selected segment...   (a line like  @ref1 says: hello  becomes dialogue)";
         }
-        // Anchors are guide-only, so lock their prompt field but leave Guide Strength active.
-        this.promptInput.disabled = isAnchorSeg;
-        this.promptInput.style.opacity = isAnchorSeg ? "0.5" : "1.0";
+        this.promptInput.disabled = false;
+        this.promptInput.style.opacity = "1.0";
 
         const isImage = (this.selectionType === "image") && (seg.type === "image" || seg.type === "video");
         const strength = isImage ? (seg.guideStrength ?? 1.0) : 1.0;
@@ -6784,9 +7253,7 @@ class TimelineEditor {
         }
 
         if (isSelected) {
-          // Image Anchors get an orange outline so they read differently from
-          // prompt-synced segments (which stay white when selected).
-          const outlineColor = seg.isAnchor ? "#ff9d2e" : "#fff";
+          const outlineColor = "#fff";
           this.ctx.strokeStyle = outlineColor;
           this.ctx.lineWidth = 2;
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
@@ -6806,57 +7273,17 @@ class TimelineEditor {
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
         }
 
-        // Anchor glyph: drawn for anchors whether idle OR selected, so the marker
-        // stays visible on selection. Bottom-right corner, tiny dot fallback if thin.
-        if (seg.isAnchor && seg.type !== "ghost") {
-          const _anchBottom = RULER_HEIGHT + this.blockHeight;
-          if (pxWidth >= 24 && this.blockHeight > 30) {
-            const R = 9;
-            const cx = startX + pxWidth - 6 - R;
-            const cy = _anchBottom - 6 - R;
-            this.ctx.save();
-            const gs = R * 0.9;
-            this.ctx.strokeStyle = "#ffcf9b";
-            this.ctx.lineWidth = 1.2;
-            this.ctx.lineCap = "round";
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy - gs * 0.62, gs * 0.24, 0, Math.PI * 2);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx, cy - gs * 0.4);
-            this.ctx.lineTo(cx, cy + gs * 0.72);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx - gs * 0.5, cy - gs * 0.1);
-            this.ctx.lineTo(cx + gs * 0.5, cy - gs * 0.1);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy + gs * 0.05, gs * 0.62, Math.PI * 0.16, Math.PI * 0.84);
-            this.ctx.stroke();
-            this.ctx.restore();
-          } else if (pxWidth >= 6) {
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.arc(startX + pxWidth / 2, _anchBottom - 7, 2.5, 0, Math.PI * 2);
-            this.ctx.fillStyle = "rgba(255, 157, 46, 0.95)";
-            this.ctx.fill();
-            this.ctx.restore();
-          }
-        }
         this.ctx.globalAlpha = 1.0;
       }
 
       // --- Prompt zones: boundary lines (always) + zone ribbon (toggle) ---
-      // A "zone" is the span one prompt governs. Image Anchors don't own a
-      // prompt (they inherit the preceding one), so they never open a new zone;
-      // the previous prompt's zone runs straight through them. This mirrors the
-      // prompt-relay logic used at export time, so what you see is what renders.
+      // A "zone" is the span one prompt governs.
       if (totalFrames > 0 && this.blockHeight > 20) {
         const zoneSegs = sortedSegments
           .filter(s => s.type !== "ghost")
           .slice()
           .sort((a, b) => a.start - b.start);
-        const realZoneSegs = zoneSegs.filter(s => !s.isAnchor);
+        const realZoneSegs = zoneSegs;
 
         if (realZoneSegs.length > 0) {
           const zones = realZoneSegs.map((s, i) => ({
@@ -9217,113 +9644,296 @@ class TimelineEditor {
 
   // --- Backend Data Sync ---
   // --- Visual Character Reference Slots ---
+  // The slots hold <Subject N> definitions, which the guide says may be "people, animals,
+  // or objects; scenes, backgrounds, or environments; clothing, props, interfaces, or
+  // visual effects; styles, actions, expressions, or poses" — not only characters. The
+  // class names still say "character" because they are shared with a lot of CSS and with
+  // the LTX editor this was forked from; the data key is `subjects`.
+  subjectSlots() {
+    if (!Array.isArray(this.timeline.subjects)) {
+      this.timeline.subjects = normaliseSubjectSlots(
+        this.timeline.subjects || this.timeline.characters);
+    }
+    return this.timeline.subjects;
+  }
+
+  // Dragged from the strip under the panel and remembered per node, exactly like
+  // propHeight and globalPropHeight. Clamped on read so a workflow saved when the slot
+  // was a fixed 148px does not come back too short for the two text boxes.
+  subjectSlotHeight() {
+    const stored = this.node?.properties?.subjectSlotHeight;
+    return Math.max(SUBJECT_SLOT_MIN_H, stored || SUBJECT_SLOT_DEFAULT_H);
+  }
+
+  // Shown only on the ref2va path, where `summary` is a section of the prompt.
+  _syncSummaryField() {
+    if (!this.summaryField) return;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    this.summaryField.style.display = refsOn ? "" : "none";
+  }
+
+  // Which slot is which `<Subject N>` is the planner's answer, taken from the last compile
+  // rather than worked out again here: only slots that hand over a reference image are
+  // numbered, so slot 2 is <Subject 1> when slot 1 is empty, and a menu that counted slots
+  // named a subject the prompt did not have.
+  //
+  // A slot with no number has no label for a clip to be tied to — its description goes into
+  // the prose instead — so it is offered as unavailable, with the reason, rather than
+  // taking the click and doing nothing with it.
+  _audioSubjectOptions(seg) {
+    const subjectOfSlot = this.node?._mmxSubjectOfSlot;
+    const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+    return ['<option value="">— not a specific subject —</option>'].concat(
+      this.subjectSlots().map((c, i) => {
+        const desc = escapeAttr((c.description || "").trim().slice(0, 40));
+        const tail = desc ? ` — ${desc}` : "";
+        const sel = String(seg.subject || "") === String(i + 1) ? " selected" : "";
+        const subject = subjectOfSlot?.[String(i + 1)];
+        if (subject) {
+          return `<option value="${i + 1}"${sel}>Subject ${subject}${tail}</option>`;
+        }
+        // No compile has answered yet: say nothing rather than guess a number
+        if (!subjectOfSlot) {
+          return `<option value="${i + 1}"${sel}>Slot ${i + 1}${tail}</option>`;
+        }
+        const why = !refsOn ? "Refs OFF sends no references"
+          : (c.images && c.images.length) ? "not among the references sent"
+          : "needs a reference image";
+        return `<option value="" disabled${sel}>Slot ${i + 1}${tail} — ${why}</option>`;
+      })).join("");
+  }
+
+  // The menu is built when a clip is selected, but what it says depends on the panel above
+  // it: drop an image into a slot and that slot becomes bindable, delete one and it stops.
+  // Only the options are replaced, so the `change` listener on the <select> survives — and
+  // not while it has focus, which would shut an open menu under the pointer.
+  refreshAudioSubjectMenu() {
+    if (this.selectionType !== "audio") return;
+    const sel = this.audioInfoArea?.querySelector(".mmxd-audio-subject");
+    if (!sel || document.activeElement === sel) return;
+    const seg = this.timeline.audioSegments?.[this.selectedIndex];
+    if (!seg) return;
+    sel.innerHTML = this._audioSubjectOptions(seg);
+  }
+
+  // The stepper owns this number and nothing else writes it. It used to grow on its own as
+  // slots filled, which meant the value beside the buttons moved without anyone pressing
+  // them — and `−` needed a two-stage rule to work around its own panel putting the slot
+  // straight back. One owner, one meaning.
+  visibleSlotCount() {
+    return clampSubjectSlots(this.timeline.subjectSlotCount);
+  }
+
+  _buildSubjectSlotEl(i) {
+    const slot = document.createElement("div");
+    slot.className = "mmxd-character-slot";
+    slot.dataset.index = i;
+
+    slot.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.classList.add("drag-over");
+    });
+    slot.addEventListener("dragleave", (e) => {
+      e.stopPropagation();
+      slot.classList.remove("drag-over");
+    });
+    slot.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.classList.remove("drag-over");
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        Array.from(e.dataTransfer.files).forEach(f => this.handleCharacterImageUpload(f, i));
+      }
+    });
+    slot.addEventListener("click", (e) => {
+      // clicking anywhere else in the slot opens a file picker, so every interactive
+      // child has to be named here — including the field wrappers, whose border and
+      // caption are part of the box the user is aiming at
+      if (e.target.closest(".mmxd-character-delete") ||
+          e.target.closest(".mmxd-character-validate-btn") ||
+          e.target.closest(".mmxd-character-field") ||
+          e.target.closest(".mmxd-character-desc") ||
+          e.target.closest(".mmxd-msel")) return;
+
+      const fi = document.createElement("input");
+      fi.type = "file";
+      fi.accept = "image/*";
+      fi.multiple = true;
+      fi.addEventListener("change", (ev) => {
+        if (ev.target.files) {
+          Array.from(ev.target.files).forEach(f => this.handleCharacterImageUpload(f, i));
+        }
+      });
+      fi.click();
+    });
+    return slot;
+  }
+
   createCharacterSlots(parent) {
+    const wrap = document.createElement("div");
+    wrap.style.position = "relative";
+    wrap.style.width = "100%";
+    wrap.style.flexShrink = "0";
+
     const container = document.createElement("div");
     container.className = "mmxd-characters-container";
 
-    if (!this.timeline.characters) {
-      this.timeline.characters = Array.from(
-        { length: CHAR_SLOTS_DEFAULT }, () => ({ images: [], description: "" }));
-    }
-    // however many were saved, within the range the model card allows for
-    this.charSlotCount = Math.max(
-      CHAR_SLOTS_MIN, Math.min(CHAR_SLOTS_MAX, this.timeline.characters.length || CHAR_SLOTS_DEFAULT));
-    while (this.timeline.characters.length < this.charSlotCount) {
-      this.timeline.characters.push({ images: [], description: "" });
-    }
+    this.subjectSlots();
 
     this.characterSlots = [];
     this._charPanelParent = parent;
     this._charPanelContainerEl = container;
 
-    for (let i = 0; i < this.charSlotCount; i++) {
-      const slot = document.createElement("div");
-      slot.className = "mmxd-character-slot";
-      slot.dataset.index = i;
+    wrap.appendChild(this._buildSubjectStepper());
+    wrap.appendChild(container);
+    wrap.appendChild(this._buildSubjectResizer());
+    parent.appendChild(wrap);
+    this.charPanelContainer = container;
+    this.charPanelHeight = subjectPanelHeight(3, this.subjectSlotHeight());
+    this.updateCharacterSlotsUI();
+  }
 
-      slot.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        slot.classList.add("drag-over");
-      });
-      slot.addEventListener("dragleave", (e) => {
-        e.stopPropagation();
-        slot.classList.remove("drag-over");
-      });
-      slot.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        slot.classList.remove("drag-over");
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          Array.from(e.dataTransfer.files).forEach(f => this.handleCharacterImageUpload(f, i));
-        }
-      });
-      slot.addEventListener("click", (e) => {
-        if (e.target.closest(".mmxd-character-delete") ||
-            e.target.closest(".mmxd-character-validate-btn") ||
-            e.target.closest(".mmxd-character-desc")) return;
-
-        const fi = document.createElement("input");
-        fi.type = "file";
-        fi.accept = "image/*";
-        fi.multiple = true;
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files) {
-            Array.from(ev.target.files).forEach(f => this.handleCharacterImageUpload(f, i));
-          }
-        });
-        fi.click();
-      });
-
-      container.appendChild(slot);
-      this.characterSlots.push(slot);
-    }
-
-    // --- add / remove a slot ---------------------------------------------------------
-    // Three was a guess baked into the code in three places, not a limit of the model:
-    // the card allows nine reference images in total, and each slot holds two. Issue #8.
+  // Its own row above the slots, not a flex item among them: the container wraps three
+  // slots to a line and subjectPanelHeight counts rows, so a stepper sitting in that flow
+  // would push a slot onto a line the reserved height does not know about.
+  _buildSubjectStepper() {
     const stepper = document.createElement("div");
     stepper.className = "mmxd-character-stepper";
 
-    const mkBtn = (label, title, fn) => {
+    const mkBtn = (label, title, onClick) => {
       const b = document.createElement("button");
       b.className = "mmxd-character-step-btn";
       b.textContent = label;
       b.title = title;
-      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+      b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
       return b;
     };
-    const count = document.createElement("span");
-    count.className = "mmxd-character-step-count";
-
-    const rebuild = () => {
-      const parentEl = this._charPanelParent;
-      this._charPanelContainerEl?.remove();
-      this.createCharacterSlots(parentEl);
+    const redraw = () => {
+      this.updateCharacterSlotsUI();
       this.commitChanges(true);
     };
+
+    const count = document.createElement("span");
+    count.className = "mmxd-character-step-count";
     this._charStepperRefresh = () => {
-      count.textContent = `${this.charSlotCount} subject${this.charSlotCount === 1 ? "" : "s"}`;
+      const n = this.visibleSlotCount();
+      count.textContent = `${n} subject${n === 1 ? "" : "s"}`;
     };
 
-    stepper.appendChild(mkBtn("−", "One subject fewer — the last slot and its images go", () => {
-      if (this.charSlotCount <= CHAR_SLOTS_MIN) return;
-      this.timeline.characters.splice(this.charSlotCount - 1, 1);
-      rebuild();
+    stepper.appendChild(mkBtn("−", "One subject fewer — the last slot and its images go",
+                              () => {
+      const n = this.visibleSlotCount();
+      if (n <= 1) return;
+      // the slot goes with the count, or its images would sit in the timeline JSON with
+      // nothing on screen to show them and no way to reach them again
+      this.subjectSlots().splice(n - 1, 1);
+      this.timeline.subjectSlotCount = n - 1;
+      redraw();
     }));
     stepper.appendChild(count);
     stepper.appendChild(mkBtn("+", "One subject more", () => {
-      if (this.charSlotCount >= CHAR_SLOTS_MAX) return;
-      this.timeline.characters.splice(this.charSlotCount, 0, { images: [], description: "" });
-      rebuild();
+      const n = this.visibleSlotCount();
+      if (n >= MAX_SUBJECT_SLOTS) return;
+      this.timeline.subjectSlotCount = n + 1;
+      redraw();
     }));
-    container.appendChild(stepper);
-    this._charStepperRefresh();
+    return stepper;
+  }
 
-    parent.appendChild(container);
-    this.charPanelContainer = container;
-    this.charPanelHeight = 150;
-    this.updateCharacterSlotsUI();
+  // Same grab strip as the prompt and global-prompt panels, so the reference panel resizes
+  // the way every other part of the editor already does. Only the slot height is stored;
+  // the panel height follows from it and the row count.
+  _buildSubjectResizer() {
+    const bar = document.createElement("div");
+    bar.style.position = "absolute";
+    bar.style.bottom = "0px";
+    bar.style.left = "0px";
+    bar.style.width = "100%";
+    bar.style.height = `${SUBJECT_RESIZER_H}px`;
+    bar.style.cursor = "ns-resize";
+    bar.style.display = "flex";
+    bar.style.justifyContent = "center";
+    bar.style.alignItems = "flex-end";
+    bar.style.paddingBottom = "4px";
+    bar.title = "Drag to resize the reference images";
+    bar.innerHTML = `<div style="width: 40px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px;"></div>`;
+
+    bar.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startY = e.clientY;
+      const startH = this.subjectSlotHeight();
+
+      const doDrag = (ev) => {
+        if (ev.buttons === 0) { stopDrag(); return; }
+        // one row of slots follows the pointer 1:1; with two rows the panel grows twice
+        // as fast as the drag, which is the same deal the other resizers make
+        const newH = Math.max(SUBJECT_SLOT_MIN_H, startH + (ev.clientY - startY));
+        if (this.node?.properties) this.node.properties.subjectSlotHeight = newH;
+        this._applySubjectSlotHeight();
+      };
+      const stopDrag = () => {
+        window.removeEventListener("mousemove", doDrag, true);
+        window.removeEventListener("mouseup", stopDrag, true);
+        document.body.style.cursor = "default";
+        this.commitChanges(true);
+      };
+
+      document.body.style.cursor = "ns-resize";
+      window.addEventListener("mousemove", doDrag, true);
+      window.addEventListener("mouseup", stopDrag, true);
+    });
+    return bar;
+  }
+
+  // Pushes the dragged height onto every slot element and re-reserves the node's room.
+  _applySubjectSlotHeight() {
+    const h = this.subjectSlotHeight();
+    (this.characterSlots || []).forEach((el) => { el.style.height = `${h}px`; });
+    this.charPanelHeight = subjectPanelHeight(this.characterSlots?.length || 3, h);
+    if (this.node?.setDirtyCanvas && typeof this.node.computeSize === "function"
+        && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
+  }
+
+  // Adds or removes slot elements so the DOM matches visibleSlotCount(). Called from
+  // updateCharacterSlotsUI, which is the only entry point that redraws the panel.
+  _syncSubjectSlotEls() {
+    const container = this.charPanelContainer;
+    if (!container) return;
+    const want = this.visibleSlotCount();
+    const slots = this.subjectSlots();
+    while (slots.length < want) slots.push(emptySubjectSlot());
+    const slotH = this.subjectSlotHeight();
+    while (this.characterSlots.length < want) {
+      const el = this._buildSubjectSlotEl(this.characterSlots.length);
+      container.appendChild(el);
+      this.characterSlots.push(el);
+    }
+    while (this.characterSlots.length > want) {
+      this.characterSlots.pop().remove();
+    }
+    this.characterSlots.forEach((el) => { el.style.height = `${slotH}px`; });
+    this._charStepperRefresh?.();
+
+    // Slots wrap three to a row, so the panel's reserved height has to follow the row
+    // count or the node crops the last row the moment a fourth subject is added.
+    const height = subjectPanelHeight(want, slotH);
+    const grew = height !== this.charPanelHeight;
+    this.charPanelHeight = height;
+    // Only once the panel has been through a full build: during construction the widget's
+    // computeSize is not installed yet, so resizing here would size the node against a
+    // panel height it does not know about — and would fight the size a saved workflow
+    // restored. After that, this fires whenever a slot is gained or lost.
+    if (grew && this._subjectPanelReady && this.node?.setDirtyCanvas
+        && typeof this.node.computeSize === "function" && this.node.size) {
+      this.node.setSize([this.node.size[0], this.node.computeSize()[1]]);
+      this.node.setDirtyCanvas(true, true);
+    }
+    this._subjectPanelReady = true;
   }
 
   handleCharacterImageUpload(file, idx) {
@@ -9369,13 +9979,11 @@ class TimelineEditor {
           stored = { b64: canvas.toDataURL("image/jpeg", 0.95), name: file.name };
         }
 
-        if (!this.timeline.characters[idx].images) {
-          this.timeline.characters[idx].images = [];
-        }
-        if (this.timeline.characters[idx].images.length >= 2) {
-          this.timeline.characters[idx].images.shift();
-        }
-        this.timeline.characters[idx].images.push(stored);
+        const subjects = this.subjectSlots();
+        while (subjects.length <= idx) subjects.push(emptySubjectSlot());
+        if (!subjects[idx].images) subjects[idx].images = [];
+        if (subjects[idx].images.length >= 2) subjects[idx].images.shift();
+        subjects[idx].images.push(stored);
         this.updateCharacterSlotsUI();
         this.commitChanges();
       };
@@ -9417,20 +10025,31 @@ class TimelineEditor {
 
   updateCharacterSlotsUI() {
     if (!this.characterSlots) return;
-    if (!this.timeline.characters) {
-      this.timeline.characters = Array.from(
-        { length: CHAR_SLOTS_DEFAULT }, () => ({ images: [], description: "" }));
-    }
-    this._charStepperRefresh?.();
+    const subjects = this.subjectSlots();
+    this._syncSubjectSlotEls();
 
     for (let i = 0; i < this.characterSlots.length; i++) {
       const slot = this.characterSlots[i];
-      const data = this.timeline.characters[i] || { images: [], description: "" };
+      const data = subjects[i] || emptySubjectSlot();
       slot.innerHTML = "";
 
-      if (data.images && data.images.length > 0) {
+      // A subject is a description first and an image second. The image is what earns it
+      // a <Subject N> label on the ref2va path; on fl2va the image is discarded by the
+      // render and the description is the whole subject. So the text boxes are always
+      // here, and only the controls that can actually reach the prompt come and go.
+      const refsOn = String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF";
+      const hasImages = !!(data.images && data.images.length);
+
+      if (hasImages) {
         const previewsRow = document.createElement("div");
         previewsRow.className = "mmxd-character-previews-row";
+        if (!refsOn) {
+          // kept, because switching the toolbar back must not cost the upload — but said
+          // out loud, because fl2va sends no reference images at all
+          previewsRow.style.opacity = "0.45";
+          previewsRow.title = "Not sent on the fl2va path. Switch to 'Refs ON (ref2va)' "
+                            + "to use this image; the description below is used either way.";
+        }
 
         data.images.forEach((imgData, imgIdx) => {
           const imgWrapper = document.createElement("div");
@@ -9447,8 +10066,8 @@ class TimelineEditor {
           delBtn.title = "Delete Image";
           delBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (this.timeline.characters[i] && this.timeline.characters[i].images) {
-              this.timeline.characters[i].images.splice(imgIdx, 1);
+            if (subjects[i] && subjects[i].images) {
+              subjects[i].images.splice(imgIdx, 1);
               this.updateCharacterSlotsUI();
               this.commitChanges();
             }
@@ -9473,28 +10092,101 @@ class TimelineEditor {
         }
 
         slot.appendChild(previewsRow);
-
-        const descInput = document.createElement("textarea");
-        descInput.className = "mmxd-character-desc";
-        descInput.value = data.description || "";
-        descInput.placeholder = "manual description...";
-        descInput.addEventListener("input", () => {
-          this.timeline.characters[i].description = descInput.value;
-          this.commitChanges();
-        });
-        descInput.addEventListener("click", (e) => { e.stopPropagation(); });
-        slot.appendChild(descInput);
       } else {
+        // Still the drop target for the whole slot, but no longer the whole slot: it
+        // flexes so the text boxes below it keep their fixed height.
+        const zone = document.createElement("div");
+        zone.className = "mmxd-character-dropzone";
+
         const label = document.createElement("div");
         label.className = "mmxd-character-label";
-        label.textContent = `@char${i + 1}`;
+        label.textContent = `@ref${i + 1}`;
 
         const placeholder = document.createElement("div");
         placeholder.className = "mmxd-character-placeholder";
         placeholder.innerHTML = `${ICONS.upload}<br>Drop Sheet`;
 
-        slot.appendChild(label);
-        slot.appendChild(placeholder);
+        zone.appendChild(label);
+        zone.appendChild(placeholder);
+        slot.appendChild(zone);
+      }
+
+      {
+        // Captioned boxes, because two bare textareas in one box say nothing about which
+        // is which. Which ones appear is a question of what can reach the prompt:
+        // `retained` and the markers only exist once the slot has a picture to declare on
+        // the ref2va path, and `called` only matters where the subject has no <Subject N>
+        // label and lives in the prose instead.
+        const makeSlotField = (label, key, placeholder, first) => {
+          const field = document.createElement("div");
+          field.className = "mmxd-character-field" + (first ? " mmxd-field-first" : "");
+
+          const cap = document.createElement("div");
+          cap.className = "mmxd-character-field-label";
+          cap.textContent = label;
+          field.appendChild(cap);
+
+          const area = document.createElement("textarea");
+          area.className = "mmxd-character-desc";
+          area.value = data[key] || "";
+          area.placeholder = placeholder;
+          area.spellcheck = true;
+          area.addEventListener("input", () => {
+            subjects[i][key] = area.value;
+            this.commitChanges();
+            if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+          });
+          area.addEventListener("focus", () => field.classList.add("focus-active"));
+          area.addEventListener("blur", () => field.classList.remove("focus-active"));
+          // the slot's own click handler opens a file picker unless the click lands on a
+          // child it knows about
+          area.addEventListener("click", (e) => { e.stopPropagation(); });
+          field.appendChild(area);
+          slot.appendChild(field);
+          return area;
+        };
+
+        makeSlotField("describes", "description", "a woman in a red coat…", true);
+
+        if (refsOn && hasImages) {
+          makeSlotField("retained", "retentionNote",
+                        "identity, face and clothing — leave empty for the default");
+        } else {
+          // No <Subject N> to name this by, so the guide's own habit applies: written out
+          // in full where it first appears, then a short handle, or the same paragraph
+          // of description walks in again every shot as somebody new.
+          makeSlotField("called", "shortName",
+                        "the baker — after the first mention");
+        }
+
+        // What this subject IS, and how closely to follow it. The kind only supplies a
+        // noun for the definition line when no description is typed, so a description
+        // always wins; the retention marker is written into retention_analysis verbatim.
+        // Both are ref2va-only, and both need a picture behind them to be declared on.
+        if (refsOn && hasImages) {
+          const row = document.createElement("div");
+          row.className = "mmxd-ref-controls";
+
+          const kindSel = createMenuSelect(SUBJECT_KIND_OPTIONS, { width: "100%" });
+          kindSel.value = data.kind || "person";
+          kindSel.title = "What this subject is. A typed description replaces it.";
+          kindSel.addEventListener("change", () => {
+            subjects[i].kind = kindSel.value;
+            this.commitChanges();
+          });
+
+          const retSel = createMenuSelect(RETENTION_OPTIONS, { width: "100%" });
+          retSel.value = data.retention || "fully_preserved";
+          retSel.title = RETENTION_TIP;
+          retSel.addEventListener("change", () => {
+            subjects[i].retention = retSel.value;
+            this.commitChanges();
+          });
+
+          row.appendChild(kindSel);
+          row.appendChild(retSel);
+          slot.appendChild(row);
+        }
       }
     }
   }
@@ -9528,7 +10220,7 @@ class TimelineEditor {
     }
 
     const b64_images = (await Promise.all(
-      (this.timeline.characters[idx].images || []).map(img => this._refImageToB64(img))
+      (this.subjectSlots()[idx].images || []).map(img => this._refImageToB64(img))
     )).filter(Boolean);
 
     try {
@@ -9538,6 +10230,9 @@ class TimelineEditor {
           clip_name: clip_name,
           image_b64: b64_images,
           char_index: idx,
+          // so the model is asked about a place or a garment when that is what the slot
+          // holds, instead of being asked for hair and clothing regardless
+          kind: this.subjectSlots()[idx]?.kind || "person",
           provider: this.timeline.analyzeProvider || "ollama",
           base_url: this.timeline.analyzeBaseUrl || "",
           model: this.timeline.analyzeModel || "",
@@ -9545,7 +10240,12 @@ class TimelineEditor {
       });
       const result = await resp.json();
       if (result.status === "success") {
-        this.timeline.characters[idx].description = result.description;
+        this.subjectSlots()[idx].description = result.description;
+        // A model that ignored the two-line format returns everything as the description
+        // and nothing here, which must not wipe a note the user wrote by hand.
+        if (result.retention_note) {
+          this.subjectSlots()[idx].retentionNote = result.retention_note;
+        }
         btn.textContent = "Success!";
         setTimeout(() => { this.updateCharacterSlotsUI(); this.commitChanges(); }, 1500);
       } else {
@@ -9561,7 +10261,7 @@ class TimelineEditor {
     }
   }
 
-  // --- @char auto-complete popup (attaches to a given textarea) ---
+  // --- @refN auto-complete popup (attaches to a given textarea) ---
   setupAutocomplete(input) {
     if (!input || input._prAutocompleteAttached) return;
     input._prAutocompleteAttached = true;
@@ -9573,11 +10273,33 @@ class TimelineEditor {
     if (!this._autocompleteMenus) this._autocompleteMenus = [];
     this._autocompleteMenus.push(menu);
 
-    const suggestions = [
-      { tag: "@char1", label: "Character 1" },
-      { tag: "@char2", label: "Character 2" },
-      { tag: "@char3", label: "Character 3" }
-    ];
+    // One entry per slot that has something in it, labelled with its description so a
+    // panel of nine is still navigable. @char1..@char3 stay valid in typed prompts — the
+    // planner accepts both spellings — but only @refN is offered, since a slot is no
+    // longer necessarily a character.
+    const buildSuggestions = () => {
+      const slots = this.subjectSlots();
+      const out = [];
+      for (let i = 0; i < slots.length && i < MAX_SUBJECT_SLOTS; i++) {
+        const s = slots[i] || {};
+        // a description with no image is a whole subject on the fl2va path, where the
+        // image would be discarded anyway — so an empty slot is one with neither
+        if (!(s.images && s.images.length) && !(s.description || "").trim()) continue;
+        const desc = (s.description || "").trim();
+        out.push({
+          tag: `@ref${i + 1}`,
+          label: desc ? (desc.length > 40 ? desc.slice(0, 40) + "…" : desc)
+                      : (s.kind || "person"),
+        });
+      }
+      // nothing dropped yet: still offer the three that always exist, so the tag is
+      // discoverable before the panel is filled
+      if (!out.length) {
+        for (let i = 0; i < 3; i++) out.push({ tag: `@ref${i + 1}`, label: `slot ${i + 1}` });
+      }
+      return out;
+    };
+    let suggestions = buildSuggestions();
 
     let activeIndex = 0;
     let showMenu = false;
@@ -9596,6 +10318,9 @@ class TimelineEditor {
       const cursor = input.selectionStart;
       const query = text.slice(queryStart + 1, cursor).toLowerCase();
 
+      // rebuilt each time the menu is drawn: slots are added and described while the
+      // editor is open, and a stale list would offer tags that no longer resolve
+      suggestions = buildSuggestions();
       const filtered = suggestions.filter(s => s.tag.toLowerCase().includes("@" + query) || s.tag.toLowerCase().includes(query));
       if (filtered.length === 0) { hideMenu(); return; }
 
@@ -9745,25 +10470,6 @@ class TimelineEditor {
         const effectiveStart = Math.max(seg.start, startFrames);
         const clippedEnd = Math.min(seg.start + seg.length, endFrames);
 
-        // Image Anchors are guide-only: they still get inserted as a keyframe by the
-        // Python guide node (which reads them from timeline_data by type "image"), but
-        // they must NOT create their own prompt-relay segment. Absorb their timespan
-        // (and any gap before them) into the preceding prompt so it "covers" the anchor.
-        // If an anchor is the very first thing on the timeline, its span is carried
-        // forward as pendingGap into the next real prompt segment.
-        if (seg.isAnchor) {
-          const absorb = clippedEnd - currentCursor;
-          if (absorb > 0) {
-            if (contiguousLengths.length > 0) {
-              contiguousLengths[contiguousLengths.length - 1] += absorb;
-            } else {
-              pendingGap += absorb;
-            }
-          }
-          currentCursor = Math.max(currentCursor, seg.start + seg.length);
-          continue;
-        }
-
         if (effectiveStart > currentCursor) {
           const gapLength = Math.min(effectiveStart, endFrames) - currentCursor;
           if (contiguousLengths.length > 0) {
@@ -9822,9 +10528,20 @@ class TimelineEditor {
       analyzeProvider: this.timeline.analyzeProvider || "ollama",
       analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
       analyzeModel: this.timeline.analyzeModel || "",
-      characters: (this.timeline.characters || []).map(c => ({
+      summary: this.timeline.summary || "",
+      task_type_override: this.timeline.task_type_override || "",
+      // 0 means "however many the panel grew to on its own" — only the stepper writes it
+      subjectSlotCount: this.visibleSlotCount(),
+      // Only the slots that are on screen. The planner reads this array, not the count, so
+      // a slot left behind by `−` would keep sending its images with no box anywhere to
+      // show them or take them out again.
+      subjects: this.subjectSlots().slice(0, this.visibleSlotCount()).map(c => ({
         images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
-        description: c.description || ""
+        description: c.description || "",
+        shortName: c.shortName || "",
+        kind: c.kind || "person",
+        retention: c.retention || "fully_preserved",
+        retentionNote: c.retentionNote || ""
       })),
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
@@ -10563,30 +11280,6 @@ class TimelineEditor {
     }
 
     // ==========================================
-    // 4b. Define Convert to / from Image Anchor (image segments only)
-    // ==========================================
-    let anchorToggleBtn = null;
-    if (trackType === "image" && seg.type === "image") {
-      anchorToggleBtn = document.createElement("button");
-      anchorToggleBtn.className = "mmxd-gap-menu-btn";
-      const anchorIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>`;
-      anchorToggleBtn.innerHTML = seg.isAnchor
-        ? `${anchorIcon} Convert to Image Segment`
-        : `${anchorIcon} Convert to Image Anchor`;
-      anchorToggleBtn.onclick = () => {
-        seg.isAnchor = !seg.isAnchor;
-        this.commitChanges();
-        // If this segment is the one shown in the side panel, refresh it so the
-        // prompt box enables/disables and the strength row updates immediately.
-        if (this.selectedSegmentIds && this.selectedSegmentIds.includes(seg.id)) {
-          this.updateUIFromSelection();
-        }
-        this.render();
-        this.dismissContextMenu();
-      };
-    }
-
-    // ==========================================
     // 5. Define Unlink Media & Mark Selection options
     // ==========================================
     const isVidLink = trackType === "video" && seg.id.endsWith("_v");
@@ -10626,6 +11319,58 @@ class TimelineEditor {
     };
 
     // ==========================================
+    // 5b. Reference role and retention (ref2va only — the fl2va path has no labels to
+    // attach any of this to, so showing it there would offer a setting with no effect)
+    // ==========================================
+    const refBtns = [];
+    if (String(this.timeline.reference_mode || "OFF").toUpperCase() !== "OFF") {
+      let onRefChange = () => {};
+      const cycler = (caption, options, key, fallback, tip) => {
+        const btn = document.createElement("button");
+        btn.className = "mmxd-gap-menu-btn";
+        const draw = () => {
+          const cur = options.find(o => o.value === seg[key]) || options[0];
+          btn.innerHTML = `${caption}: <b style="color:#4fff8f">${cur.label}</b>`;
+        };
+        btn.title = tip;
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const at = Math.max(0, options.findIndex(o => o.value === (seg[key] || fallback)));
+          seg[key] = options[(at + 1) % options.length].value;
+          draw();
+          onRefChange();
+          this.commitChanges();
+          this.render();
+          if (this.node?._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+        };
+        draw();
+        return btn;
+      };
+      if (trackType === "image" && (seg.type === "image" || seg.type === "video")) {
+        refBtns.push(cycler("Used as", REF_ROLE_OPTIONS, "refRole", "auto", REF_ROLE_TIP));
+        // Only meaningful once the image defines something rather than anchoring a frame:
+        // it picks the noun the <Subject N> line uses. Built either way and shown on
+        // demand, so cycling the role reveals it without reopening the menu. A slot in
+        // the panel above is the place for a subject that needs a written description.
+        const kindBtn = cycler("Defines a", SUBJECT_KIND_OPTIONS, "refKind", "person",
+                               "What this image defines, for its <Subject N> line.");
+        onRefChange = () => {
+          kindBtn.style.display = seg.refRole === "subject" ? "" : "none";
+        };
+        onRefChange();
+        refBtns.push(kindBtn);
+        refBtns.push(cycler("Follow it", RETENTION_OPTIONS, "retention",
+                            "fully_preserved", RETENTION_TIP));
+      } else if (trackType === "motion") {
+        refBtns.push(cycler("Follow it", RETENTION_OPTIONS, "retention",
+                            "fully_preserved", RETENTION_TIP));
+      } else if (trackType === "audio") {
+        refBtns.push(cycler("Follow it", RETENTION_AUDIO_OPTIONS, "retention",
+                            "reference", RETENTION_AUDIO_TIP));
+      }
+    }
+
+    // ==========================================
     // 6. Define Delete Option
     // ==========================================
     const delBtn = document.createElement("button");
@@ -10639,12 +11384,6 @@ class TimelineEditor {
       this.deleteSelectedSegment();
       this.dismissContextMenu();
     };
-
-    // Very top: Convert to / from Image Anchor (image segments only)
-    if (anchorToggleBtn) {
-      menu.appendChild(anchorToggleBtn);
-      menu.appendChild(makeDivider());
-    }
 
     // Very top: Split at Playhead (if active/available)
     if (splitBtn) {
@@ -10678,6 +11417,12 @@ class TimelineEditor {
     // Group 4: Convert to End Frame (Only if toggleEndFrameBtn is defined)
     if (toggleEndFrameBtn) {
       menu.appendChild(toggleEndFrameBtn);
+      menu.appendChild(makeDivider());
+    }
+
+    // Group 5a: what this reference is for, and how closely to follow it
+    if (refBtns.length) {
+      refBtns.forEach(b => menu.appendChild(b));
       menu.appendChild(makeDivider());
     }
 
@@ -10759,23 +11504,6 @@ class TimelineEditor {
         fi.click();
       };
       menu.appendChild(imgBtn);
-
-      const anchorBtn = document.createElement("button");
-      anchorBtn.className = "mmxd-gap-menu-btn";
-      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
-      anchorBtn.onclick = () => {
-        this.dismissContextMenu();
-        const fi = document.createElement("input");
-        fi.type = "file"; fi.accept = "image/*";
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files?.[0]) {
-            const gapLength = gap.frameEnd - gap.frameStart;
-            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
-          }
-        });
-        fi.click();
-      };
-      menu.appendChild(anchorBtn);
 
       const pasteImageBtn = document.createElement("button");
       pasteImageBtn.className = "mmxd-gap-menu-btn";
@@ -10927,25 +11655,8 @@ class TimelineEditor {
         fi.click();
       });
 
-      const anchorBtn = document.createElement("button");
-      anchorBtn.className = "mmxd-gap-menu-btn";
-      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
-      anchorBtn.addEventListener("click", () => {
-        this.dismissGapMenu();
-        const fi = document.createElement("input");
-        fi.type = "file"; fi.accept = "image/*";
-        fi.addEventListener("change", (ev) => {
-          if (ev.target.files?.[0]) {
-            const gapLength = gap.frameEnd - gap.frameStart;
-            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
-          }
-        });
-        fi.click();
-      });
-
       menu.appendChild(textBtn);
       menu.appendChild(imgBtn);
-      menu.appendChild(anchorBtn);
       menu.appendChild(vidBtn);
       menu.appendChild(pasteImageBtn);
     } else if (currentTrack === "motion") {
@@ -11320,9 +12031,16 @@ class TimelineEditor {
         analyzeProvider: this.timeline.analyzeProvider || "ollama",
         analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
         analyzeModel: this.timeline.analyzeModel || "",
-        characters: (this.timeline.characters || []).map(c => ({
+        summary: this.timeline.summary || "",
+        task_type_override: this.timeline.task_type_override || "",
+        subjectSlotCount: this.visibleSlotCount(),
+        subjects: this.subjectSlots().slice(0, this.visibleSlotCount()).map(c => ({
           images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
-          description: c.description || ""
+          description: c.description || "",
+          shortName: c.shortName || "",
+          kind: c.kind || "person",
+          retention: c.retention || "fully_preserved",
+          retentionNote: c.retentionNote || ""
         })),
         segments: (this.timeline.segments || []).map(s => {
           const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
@@ -11687,6 +12405,27 @@ class TimelineEditor {
     fmtCtrl.appendChild(fmtCuSeg);
 
     menu.appendChild(this._makeSettingRow("Prompt Format", fmtCtrl));
+
+    // The [task type] prefix on `summary` is derived from what the references are
+    // actually used for. This is the escape hatch for the two the timeline cannot know —
+    // `video editing` and `video continuation`, which need a source video this node has
+    // no path to edit or continue.
+    const taskInput = document.createElement("input");
+    taskInput.type = "text";
+    taskInput.className = "mmxd-settings-input";
+    taskInput.placeholder = "auto — e.g. video continuation + keyframe completion";
+    taskInput.value = this.timeline.task_type_override || "";
+    taskInput.title =
+      "Overrides the square-bracketed task type on the summary line.\n" +
+      "Leave empty to derive it from the references in use.\n" +
+      "Guide values: keyframe completion, reference generation, video editing,\n" +
+      "video continuation, audio reuse, audio reference — joined with ' + '.";
+    taskInput.addEventListener("input", () => {
+      this.timeline.task_type_override = taskInput.value;
+      this.commitChanges(true);
+      if (this.node._mmxRefreshPrompt) this.node._mmxRefreshPrompt();
+    });
+    menu.appendChild(this._makeSettingRow("Task Type", taskInput));
 
     const divider2 = document.createElement("div");
     divider2.className = "mmxd-settings-divider";
@@ -12901,9 +13640,11 @@ app.registerExtension({
           const canvasH = self._timelineEditor ? self._timelineEditor.canvasHeight : CANVAS_HEIGHT;
           const propH = self._timelineEditor ? (self._timelineEditor.propHeight || 90) : 90;
           const globalPropH = self._timelineEditor ? (self._timelineEditor.globalPropHeight || 60) : 60;
-          // Reserve room for the @char reference panel at the bottom so the node doesn't
+          // Reserve room for the @refN reference panel at the bottom so the node doesn't
           // collapse and crop it whenever ComfyUI recomputes the node height.
-          const charPanelH = self._timelineEditor ? (self._timelineEditor.charPanelHeight || 150) : 150;
+          const charPanelH = self._timelineEditor
+            ? (self._timelineEditor.charPanelHeight || subjectPanelHeight(3, self.properties?.subjectSlotHeight))
+            : subjectPanelHeight(3, self.properties?.subjectSlotHeight);
           const nodeWidth = self.size?.[0] || width || 1375;
           return [Math.max(10, nodeWidth - 30), canvasH + propH + globalPropH + charPanelH + 160];
         };
@@ -13120,6 +13861,11 @@ app.registerExtension({
               // the panel previews those. Wire more than you describe and the node will
               // number more than the panel shows; describe them and the two agree.
               extra_ref_image_count: refNoteCount,
+              // Which is why the wire's own state goes too: with nothing described there
+              // is no count to preview at all, and the endpoint turns that into a caveat
+              // rather than showing <Picture 2> where the render will send <Picture 5>.
+              ref_images_connected:
+                self.inputs?.find(i => i.name === "ref_images")?.link != null,
             };
             const resp = await api.fetchApi("/minimax_director/compile_prompt", {
               method: "POST", body: JSON.stringify(body),
@@ -13127,6 +13873,12 @@ app.registerExtension({
             const d = await resp.json();
             if (d.status !== "success") throw new Error(d.message || "compile failed");
             pText.textContent = d.prompt || "";
+            // slot -> <Subject N>, straight from the planner, for the properties panel's
+            // "Voice of" menu to label itself by. Cached because that menu is built on
+            // selection, not on this refresh — and re-read here, because adding or deleting
+            // a reference image changes what it should say while it is already on screen.
+            self._mmxSubjectOfSlot = d.subject_of_slot || {};
+            self._timelineEditor?.refreshAudioSubjectMenu?.();
             // Keep the textarea in step with what is stored, but never while it has the
             // caret — clobbering someone's sentence mid-word is unforgivable.
             if (d.overridden && document.activeElement !== pEdit
@@ -13134,8 +13886,17 @@ app.registerExtension({
               pEdit.value = d.prompt || "";
             }
             self._mmxApplyPromptMode?.();
+            // The word count is information, not a verdict: the guide suggests 350-500 for
+            // generation tasks, which is a lot for a 5-15s clip, so it sits in the badge
+            // where it can be glanced at rather than in the warnings where it would fire
+            // on almost every timeline.
             pBadge.textContent = `${d.mode} · ${d.format || ""} · ${d.shots} shot${d.shots === 1 ? "" : "s"} · `
-              + `${d.length}f / ${d.seconds}s · refs ${d.refs.images}i/${d.refs.videos}v/${d.refs.audios}a`;
+              + `${d.length}f / ${d.seconds}s · refs ${d.refs.images}i/${d.refs.videos}v/${d.refs.audios}a`
+              + (d.words ? ` · ${d.words} words` : "");
+            pBadge.title = d.words
+              ? `detailed_description is about ${d.words} words. The guide suggests 350-500 `
+                + `for generation tasks; editing descriptions scale with the source instead.`
+              : "";
             pWarn.textContent = (d.warnings || []).join("  •  ");
             pWarn.style.display = (!pCollapsed && pWarn.textContent) ? "block" : "none";
           } catch (e) {
