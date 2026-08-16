@@ -1316,6 +1316,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # same video" rather than "parked" — and the editor does not even draw the audio track.
     ref_video_segs, ref_audio_segs = [], []
     over_cap = []
+    override_dropped_audio = []
     if ref_mode_on:
         if use_custom_motion:
             motion = [s for s in (tdata.get("motionSegments", []) or [])
@@ -1329,8 +1330,23 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
                      if (s.get("audioFile") or s.get("audioB64"))
                      and (not retake or overlaps(s, win_start, win_end))]
             audio.sort(key=lambda s: float(s.get("start", 0)))
-            ref_audio_segs = audio[:MAX_REF_AUDIOS]
-            over_cap.extend(("audio", MAX_REF_AUDIOS, s) for s in audio[MAX_REF_AUDIOS:])
+            # Override Audio and the audio track are two answers to one question — where the
+            # sound comes from — and the editor keeps them exclusive: turning either on turns
+            # the other off. Only a hand-edited or scripted workflow arrives with both, and
+            # both cannot be sent. Core emits an <Audio j> for each reference video's
+            # soundtrack *before* the standalone clips, while the labels here are numbered
+            # from the track alone, so every <Audio N> in the prompt would name a different
+            # clip than the model was handed and a voice binding would point at a soundtrack.
+            # Renumbering cannot fix it from here either: a reference video with no audio
+            # stream contributes no <Audio> item, which is not knowable until the file is
+            # opened. So Override Audio wins, exactly as it does in the editor — and where
+            # the mixdown is concerned it already had, since build_combined_audio reads the
+            # reference videos and never looks at the audio track on this path.
+            if override_audio and ref_video_segs:
+                override_dropped_audio = [seg_name(s) for s in audio]
+            else:
+                ref_audio_segs = audio[:MAX_REF_AUDIOS]
+                over_cap.extend(("audio", MAX_REF_AUDIOS, s) for s in audio[MAX_REF_AUDIOS:])
 
     # --- total file cap ---
     # The per-type caps are not the whole story: H3 also takes at most 12 reference files
@@ -1396,6 +1412,14 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # Override Audio is different, because it is the one place two explicit choices
     # contradict each other. It says "take the soundtrack from the reference videos", and a
     # parked clip cannot supply one — build_combined_audio fills the window and no more.
+    if override_dropped_audio:
+        ref_warnings.append(
+            "Override Audio and the audio track are two answers to one question, and the "
+            "editor keeps them exclusive; this timeline has both on. Override Audio wins "
+            "and these clips were not sent, because <Audio N> counts each reference video's "
+            "soundtrack first and every label in the prompt would have named a different "
+            "clip: %s." % ", ".join("'%s'" % n for n in override_dropped_audio))
+
     if override_audio:
         muted = [seg_name(s) for s in ref_video_segs
                  if not overlaps(s, win_start, win_end)]

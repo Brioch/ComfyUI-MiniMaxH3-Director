@@ -2392,7 +2392,16 @@ class TimelineEditor {
         }
       }
 
-      const matchingSegs = this.timeline.audioSegments.filter(s => s.audioFile === seg.audioFile || s._blobUrl === seg._blobUrl);
+      // Only the clips that really are this file. A standalone audio clip never gets a
+      // `_blobUrl`, and commitChanges strips the key from every segment it saves, so
+      // `s._blobUrl === seg._blobUrl` read `undefined === undefined` for the whole track:
+      // on a reloaded workflow one clip's buffer was stamped over every other clip, and
+      // the play button played that one file at every clip's position. The waveforms
+      // stayed right, which is what made it look like a limit on how many audio files fit
+      // rather than a mix-up. `_extractAudioOnClient` guards the same loop.
+      const matchingSegs = this.timeline.audioSegments.filter(
+        s => (seg.audioFile && s.audioFile === seg.audioFile) ||
+             (seg._blobUrl && s._blobUrl === seg._blobUrl));
       for (const s of matchingSegs) {
         s._audioBuffer = audioBuffer;
         s._decoding = false;

@@ -47,7 +47,10 @@ see the exact prompt the model will receive while you are still editing it.
 ## News
 
 **Unreleased** — a **reference clip no longer has to fit inside the render window**: park it
-past the end and a 5 s render still sends all three audio references.
+past the end and a 5 s render still sends all three audio references. Every clip on the audio
+track **plays its own file** in the preview again, a reference clip that cannot be read
+**names itself** in the log, and **Override Audio** wins over the audio track outside the
+editor too.
 
 **0.2.2** · 2026-08-16 — a **spoken line stays where it was written** instead of being
 appended to the end of its shot, so first appearance and `(Sx)` follow one order, and a
@@ -299,6 +302,13 @@ being read. Drag the clip back in and it joins `combined_audio` again.
 **Override Audio** is the one case that does warn, because it is the one place two explicit
 choices contradict each other: it takes the soundtrack from the reference videos, and a parked
 clip has none to give. That earns a line naming the clips it cannot use.
+
+Override Audio also *replaces* the audio track rather than joining it, which is why the editor
+turns one off when you turn the other on. A workflow can still arrive with both on —
+hand-edited, or driven from another node — and there Override Audio wins and the track's clips
+are not sent: `<Audio j>` numbers each reference video's soundtrack before it reaches a
+standalone clip, so sending both would leave every clip in the prompt labelled as one the model
+was never given. The warnings area names what was left out.
 
 A **retake** keeps the old rule, where the window is a deliberate slice of a video that
 already exists. Outside the marked range there means *another part of that same video*, not

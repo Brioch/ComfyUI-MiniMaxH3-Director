@@ -36,6 +36,36 @@
   already did. Parking is what made that worth fixing: a fourth clip out in the shade looks
   exactly as loaded as the three being sent.
 
+- **Every audio clip on the track plays its own file again.** With two clips loaded, both
+  showed up in the prompt and both drew their own waveform, but only one of them could be
+  heard — the other played as the first, which reads as there being room for a single audio
+  file. The preview was the whole of it. After decoding a clip, the editor handed the
+  finished buffer to every clip that matched it, and a standalone audio clip has no blob URL
+  to be matched on — a saved timeline has none at all, since the key is stripped on the way
+  out. So the test was `undefined === undefined`, true for the whole track, and whichever
+  clip decoded last became what the play button played everywhere. What is sent to the model
+  was never affected: three clips have always been three `<Audio N>` references.
+
+- **A reference clip that cannot be read says which one it was.** Both reference tracks
+  dropped a clip they could not load without a word — a missing audio file did not even
+  reach the log, because resolving a path that is not there returns nothing to report. That
+  is the one drop that must be loud. The prompt is compiled before any file is opened and it
+  numbers `<Audio N>` and `<Video k>` by the clip's place on the track, so a clip lost here
+  does not simply go missing: that label and every one after it names a reference the model
+  was never handed. The log now names the clip, its label, and — for a file that is not in
+  the input folder, or a trim that starts past the end of the audio — what went wrong.
+
+- **Override Audio wins over the audio track outside the editor too.** The two are answers to
+  one question, and the editor has always kept them exclusive: turning either on turns the
+  other off. Nothing enforced that on the Python side, so a hand-edited or scripted workflow
+  could arrive with both — and then every audio label in the prompt was wrong, because a
+  reference video's soundtrack is numbered `<Audio 1>` before any clip on the track is
+  reached. A voice binding written for a clip named a soundtrack instead. Override Audio now
+  wins there as well, and the clips it set aside are named in the warnings area. Renumbering
+  around it is not possible from where the prompt is written: a reference video with no audio
+  stream contributes no `<Audio>` label at all, and that is not knowable until the file is
+  opened.
+
 ## 0.2.2
 
 Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing
