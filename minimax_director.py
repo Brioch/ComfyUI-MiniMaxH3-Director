@@ -559,7 +559,7 @@ class MiniMaxH3Director(io.ComfyNode):
         if p["ref_mode_on"]:
             ref_image_tensors = load_ref_image_tensors(p["ref_image_slots"], fit, ref_images)
 
-            for seg in p["ref_video_segs"]:
+            for i, seg in enumerate(p["ref_video_segs"]):
                 idx = len(ref_videos)
                 seg_start = float(seg.get("start", 0))
                 seg_len = float(seg.get("length", 1))
@@ -589,7 +589,10 @@ class MiniMaxH3Director(io.ComfyNode):
                     max_pixels=int(short_edge * short_edge * plan.REF_VIDEO_ASPECT_BUDGET))
                 if frames.shape[0] < 5:
                     log.warning("[MiniMaxDirector] Reference video '%s' is shorter than 5 "
-                                "frames — skipped.", seg.get("fileName", seg["videoFile"]))
+                                "frames — skipped. The prompt still declares it as "
+                                "<Video %d>, so that label and every one after it now name "
+                                "a clip the model was not given.",
+                                plan.seg_name(seg), i + 1)
                     continue
                 ref_videos["ref_video_%d" % idx] = frames
                 if override_audio:
@@ -599,10 +602,20 @@ class MiniMaxH3Director(io.ComfyNode):
                     if clip_audio is not None:
                         ref_video_audios["ref_video_audio_%d" % idx] = clip_audio
 
-            for seg in p["ref_audio_segs"]:
+            for i, seg in enumerate(p["ref_audio_segs"]):
                 clip_audio = media.load_audio_segment(seg, fps)
-                if clip_audio is not None:
-                    ref_audios["ref_audio_%d" % len(ref_audios)] = clip_audio
+                if clip_audio is None:
+                    # The prompt is already written, and it numbers <Audio N> by the clip's
+                    # place on the track. Dropping one in silence therefore does not just
+                    # lose a reference: every label from here on names a different clip
+                    # than the model was handed. load_audio_segment has already said why
+                    # this one could not be read.
+                    log.warning("[MiniMaxDirector] Reference audio '%s' could not be "
+                                "loaded — the prompt still declares it as <Audio %d>, so "
+                                "that label and every one after it now name a clip the "
+                                "model was not given.", plan.seg_name(seg), i + 1)
+                    continue
+                ref_audios["ref_audio_%d" % len(ref_audios)] = clip_audio
 
             if first_frame is not None or last_frame is not None:
                 log.info("[MiniMaxDirector] ref2va has no first/last keyframe slot — the "

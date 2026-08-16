@@ -949,6 +949,15 @@ def load_audio_segment(seg: dict, frame_rate: float, file_key: str = "audioFile"
                 waveform = _decode_audio_stereo(path)
             except Exception as e:
                 log.warning("[MiniMaxDirector] Audio decode failed for %s: %s", seg.get(file_key), e)
+        elif not seg.get("audioB64"):
+            # A clip whose file has gone is the one failure that used to leave nothing at
+            # all behind: the caller drops it, and with the prompt already written the
+            # <Audio N> labels then name references the model never got.
+            log.warning(
+                "[MiniMaxDirector] Audio clip '%s' is not in ComfyUI's input folder "
+                "(looked in it, in input/%s, and for the bare filename). The clip is on "
+                "the timeline but there is no file left to send — re-add it.",
+                seg[file_key], WORKSPACE_SUBDIR)
     if waveform is None and seg.get("audioB64"):
         try:
             b64 = seg["audioB64"]
@@ -964,6 +973,14 @@ def load_audio_segment(seg: dict, frame_rate: float, file_key: str = "audioFile"
     length = int(float(seg.get("length", 1)) / frame_rate * AUDIO_SR)
     clip = waveform[:, max(0, start):max(0, start) + max(1, length)]
     if clip.shape[1] <= 0:
+        # Not a missing file but timeline arithmetic: the trim starts past the end of the
+        # decoded audio. Say which clip and with what numbers, or it looks identical to a
+        # clip that was never loaded at all.
+        log.warning(
+            "[MiniMaxDirector] Audio clip '%s' came out empty: its trim starts at "
+            "%.2fs and the file decoded to %.2fs. Nothing to send — retrim the clip.",
+            seg.get("fileName") or seg.get(file_key),
+            float(seg.get("trimStart", 0)) / frame_rate, waveform.shape[1] / AUDIO_SR)
         return None
     return {"waveform": clip.unsqueeze(0), "sample_rate": AUDIO_SR}
 
