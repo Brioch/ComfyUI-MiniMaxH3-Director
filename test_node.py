@@ -91,7 +91,8 @@ def _schema_inputs(node_cls):
 
 
 for node_cls in (package.MiniMaxH3Director, package.MiniMaxH3EnhancePrompt,
-                 package.MiniMaxH3PreviewOverride, package.MiniMaxH3RetakeStitch):
+                 package.MiniMaxH3PreviewOverride, package.MiniMaxH3RetakeStitch,
+                 package.MiniMaxH3SaveLastFrame):
     params = inspect.signature(node_cls.execute.__func__).parameters
     accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
     missing = [] if accepts_kwargs else [
@@ -182,6 +183,75 @@ for var in ("MMXD_TEST_KEY", "OPENAI_API_KEY", "MINIMAX_DIRECTOR_VLM_API_KEY"):
 # The Enhance node's widget names a variable rather than holding a key, because widget
 # values are serialised into the workflow. Guard the shape it passes in.
 check("an empty widget resolves to no key", key({"api_key_env": ""}), "")
+
+# -------------------------------------------------------- Save Last Frame node
+# It sits mid-chain after VAEDecode, so the two things that must hold are that the batch
+# comes out untouched and that exactly one file is written — the last frame, whatever the
+# length. Saving goes to a temp directory here; the real output folder is left alone.
+import shutil
+import tempfile
+
+import folder_paths
+import torch
+
+last_frame = package.MiniMaxH3SaveLastFrame
+_real_output = folder_paths.get_output_directory()
+_tmp_output = tempfile.mkdtemp(prefix="mmxd_lastframe_test_")
+folder_paths.set_output_directory(_tmp_output)
+try:
+    def batch(n):
+        """[n, 4, 4, 3], each frame a distinct grey so the saved one is identifiable.
+
+        Scaled to stay well inside 0..1: the saver truncates 255*value to uint8, and two
+        frames that both clip to 255 would make this test unable to fail.
+        """
+        frames = [torch.full((1, 4, 4, 3), (i + 1) / 512.0) for i in range(n)]
+        return torch.cat(frames, dim=0)
+
+    def written():
+        return sorted(f for _r, _d, fs in os.walk(_tmp_output) for f in fs)
+
+    images = batch(124)
+
+    off = last_frame.execute(images, save=False, filename_prefix="off")
+    check("save off returns the batch itself, not a copy", off.args[0] is images, True)
+    check("save off writes nothing", written(), [])
+
+    on = last_frame.execute(images, save=True, filename_prefix="on")
+    check("save on still passes the whole batch through", on.args[0] is images, True)
+    check("save on writes exactly one file", len(written()), 1)
+    check("the file is a png", written()[0].endswith(".png"), True)
+    check("the ui reports the one saved frame", len(on.ui.results), 1)
+
+    # the frame saved has to be the LAST one, not the first — read it back and compare
+    from PIL import Image as _PILImage
+    saved_path = os.path.join(_tmp_output, on.ui.results[0]["subfolder"],
+                              on.ui.results[0]["filename"])
+    px = _PILImage.open(saved_path).convert("RGB").getpixel((0, 0))[0]
+    expect_last = int(255.0 * float(images[-1, 0, 0, 0].item()))
+    expect_first = int(255.0 * float(images[0, 0, 0, 0].item()))
+    check("the saved pixel is the last frame's", px, expect_last)
+    check("...and the two frames are distinguishable, so that check can fail",
+          expect_last != expect_first, True)
+
+    # a one-frame batch has a last frame like any other
+    solo = last_frame.execute(batch(1), save=True, filename_prefix="solo")
+    check("a single-frame batch saves that frame", len(solo.ui.results), 1)
+
+    # and an empty one must not take a finished render down with it
+    empty = torch.zeros((0, 4, 4, 3))
+    before = len(written())
+    out = last_frame.execute(empty, save=True, filename_prefix="empty")
+    check("an empty batch passes through instead of raising", out.args[0] is empty, True)
+    check("an empty batch writes nothing", len(written()), before)
+    check("an empty batch reports no ui", getattr(out, "ui", None), None)
+finally:
+    folder_paths.set_output_directory(_real_output)
+    shutil.rmtree(_tmp_output, ignore_errors=True)
+
+check("the real output directory is restored", folder_paths.get_output_directory(),
+      _real_output)
+
 
 # ------------------------------------------------------------------- report
 failed = [r for r in _results if not r[0]]
