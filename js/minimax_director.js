@@ -1720,7 +1720,7 @@ class TimelineEditor {
   // reference is an input to the model, not content in the video, so an <Audio N> or
   // <Video N> clip must never stretch the output. Reference audio wants to be 10-15s per
   // the model card, and three of those growing the window would ask H3 for 45s of video —
-  // past anything it can render (issue #2). Keyframes and prompt zones decide the length;
+  // past anything it can render. Keyframes and prompt zones decide the length;
   // references park in the shaded area past it and are sent from there.
   growTimelineIfNeeded(requiredFrames) {
     const current = this.getDurationFrames();
@@ -5450,7 +5450,7 @@ class TimelineEditor {
           // deliberately no growTimelineIfNeeded: the clip lands after the last one, which
           // for anything longer than the window means out in the shaded area — where it is
           // an <Audio N> reference and not part of the soundtrack. Stretching the output to
-          // cover it is what made a second and third reference clip unreachable (issue #2).
+          // cover it is what made a second and third reference clip unreachable.
 
           this.selectionType = "audio";
           this.selectedIndex = this.timeline.audioSegments.findIndex(s => s.id === seg.id);
@@ -6132,7 +6132,7 @@ class TimelineEditor {
     if (secs < 2) parts.push("under the 2s minimum");
     else if (secs > 15) parts.push("over the 15s maximum");
     // Where it sits, when that is past the window: still sent, and not in the video. The
-    // shaded background says only the second half of that (issue #2).
+    // shaded background says only the second half of that.
     if (this._refOnlyNote(seg, "motion")) parts.push("past the window, sent as a reference");
     this.refLimitsNote.textContent = parts.join(" · ");
     this.refLimitsNote.style.color = (secs < 2 || secs > 15) ? "#d08a3a" : "#5a5a5a";
@@ -6154,7 +6154,7 @@ class TimelineEditor {
   }
 
   // What to say about a reference clip parked outside the render window. It is still sent
-  // to the model — that is the whole point of parking it there (issue #2) — and the shaded
+  // to the model — that is the whole point of parking it there — and the shaded
   // background only says "not in the video", which is the half that misleads. Empty for a
   // clip that reaches into the window, in retake mode, and with refs off, where nothing is
   // sent from either side of the line.

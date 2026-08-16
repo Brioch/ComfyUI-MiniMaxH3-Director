@@ -940,7 +940,7 @@ def render_shot(shot, values, later=None, seen=None, ids=None, label_for_slot=No
 
 
 def apply_speaker_ids(lines, labels, speaker_of_subject):
-    """Fill each voice clip's declaration in with the speaker's global ID (issue #1).
+    """Fill each voice clip's declaration in with the speaker's global ID.
 
     The guide asks a bound `<Audio N>` to "reuse that speaker's global ID in the definition":
     `<Audio 1> is the voice-timbre reference for <Subject 1> (S1).` The ID cannot be known
@@ -1305,7 +1305,7 @@ def plan_timeline(tdata, win_start, duration_frames, fps, global_prompt="",
     # A reference is an input to the model, not content in the video: <Video N> and
     # <Audio N> are never composited, so neither has any business occupying output time.
     # The model card wants each reference audio clip 10-15s long, and three of those would
-    # need a 45s timeline — longer than anything H3 can render (issue #2). So where a clip
+    # need a 45s timeline — longer than anything H3 can render. So where a clip
     # sits does not decide whether it is a reference. It decides one thing only: whether an
     # audio clip is *also* part of the muxed soundtrack, which build_combined_audio answers
     # by filling the window and nothing else. A clip parked in the shaded area past the

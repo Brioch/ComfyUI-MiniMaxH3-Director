@@ -58,8 +58,7 @@
   image into a 1024×1024 box at 992×544 rather than the 1024×576 the code's own docstring
   promises.
 
-- **A voice reference's declaration ends on the speaker's global ID**
-  ([#1](https://github.com/Brioch/ComfyUI-MiniMaxH3-Director/issues/1)), which is what the
+- **A voice reference's declaration ends on the speaker's global ID**, which is what the
   guide means by "reuse that speaker's global ID in the definition":
 
   ```
@@ -113,7 +112,7 @@
   tag that would give them a line: the declaration has no `(Sx)` to reuse in that case, which
   is correct and reads like a bug.
 
-- **A reference no longer spends output time** (issue #2). A reference is an input to the
+- **A reference no longer spends output time.** A reference is an input to the
   model, not content in the video — `<Video k>` and `<Audio j>` are never composited — but a
   clip had to overlap the render window to be sent at all, and dropping one stretched the
   window to cover it. The model card wants each reference audio clip 10–15 s long, so three

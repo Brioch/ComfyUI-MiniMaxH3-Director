@@ -1130,7 +1130,7 @@ check_in("a clip trimmed under 2s is reported, not silently extended",
                                               "start": 0, "length": 24}])
                           )["ref_warnings"]))
 
-# --------------------------- issue #2: a reference does not have to spend output time
+# --------------------------- a reference does not have to spend output time
 # The model card wants each reference audio clip 10-15s long. H3's output is 4-15s. Three
 # clips laid end to end therefore cannot fit inside any window it can render, and while a
 # reference had to overlap the window you could have three references or a renderable
@@ -1330,7 +1330,7 @@ check("a clip pointing at a slot with no images binds nothing",
                  characters=two_chars, audioSegments=[audio(subject=3)]),
               use_custom_audio=True)["prompt"], False)
 
-# ------------------------------ issue #1: the declaration reuses the speaker's global ID
+# ------------------------------ the declaration reuses the speaker's global ID
 # "When an <Audio N> explicitly corresponds to a target speaker, reuse that speaker's global
 # ID in the definition." The ID is the speaking order, not the subject number — subject 1
 # speaks first here, so the clip bound to subject 2 ends up (S2), which is the guide's own

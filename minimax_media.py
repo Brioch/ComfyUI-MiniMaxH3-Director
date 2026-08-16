@@ -1106,7 +1106,7 @@ def build_combined_audio(timeline_data_str: str, start_frame: int, duration_fram
 
     for seg in audio_segs:
         # A clip that cannot reach the window contributes nothing, and reference clips are
-        # routinely parked outside it now (issue #2) — so decide that before reading a file
+        # routinely parked outside it now — so decide that before reading a file
         # off disk and decoding 15s of it to add zero samples.
         if not plan.overlaps(seg, start_frame, start_frame + duration_frames):
             continue
