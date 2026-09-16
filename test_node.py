@@ -18,10 +18,12 @@ Two things make the import work at all, and both are easy to trip over:
 * `minimax_media` registers aiohttp routes at import time and dies without a server, so
   `PromptServer.instance` has to exist before the import, not after.
 """
+import ast
 import importlib.util
 import inspect
 import os
 import sys
+import textwrap
 import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,6 +110,28 @@ check("width and height are declared on the Director",
 # after it lands on the wrong input in workflows already saved
 check("api_key_env is the Enhance node's last widget",
       _schema_inputs(package.MiniMaxH3EnhancePrompt)[-1], "api_key_env")
+
+# Links are serialised by output index, the same trap one slot over: reordering the
+# Director's outputs, or inserting one above the end, rewires every workflow already saved
+# without touching a single wire on screen. Pin the whole list rather than its length, so a
+# swap of two same-typed slots cannot pass either.
+check("the Director's outputs are in the order saved workflows expect",
+      [o.display_name for o in package.MiniMaxH3Director.define_schema().outputs],
+      ["model", "positive", "latent", "combined_audio", "fps", "width", "height",
+       "length", "prompt", "retake_info", "timeline_data"])
+
+# and that the values handed to io.NodeOutput still line up one-for-one with that list —
+# a slot declared but never returned is an IndexError only once the models are in VRAM
+def _node_output_arity(func):
+    """How many positional values the execute() body passes to io.NodeOutput."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    return max(len(n.args) for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "NodeOutput")
+
+
+check("the Director returns one value per declared output",
+      _node_output_arity(package.MiniMaxH3Director.execute.__func__),
+      len(package.MiniMaxH3Director.define_schema().outputs))
 
 
 # ------------------------------------------------------------------ resolve_size (#14)

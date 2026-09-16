@@ -3,19 +3,17 @@
 WITHDRAWN — this node is not registered in __init__.py and does not appear in the menu.
 
 The sampling here works; it was verified against a live server, one window per toolbar
-mode, correct frame counts. What does not work is *giving it a timeline*. The editor in
-js/minimax_director.js attaches only to MiniMaxH3DirectorCS, the Director has no
-timeline_data output to wire from, and on the Director that widget is hidden
-(HIDDEN_WIDGET_NAMES). The only route left was: right-click the Director, open
-Properties, copy a multi-kilobyte JSON blob, paste it here — and repeat after every
-edit to the timeline.
+mode, correct frame counts. Giving it a timeline used to be the other problem — the editor
+in js/minimax_director.js attaches only to MiniMaxH3DirectorCS, that widget is hidden on
+the Director (HIDDEN_WIDGET_NAMES), and the only route left was to right-click the
+Director, open Properties, copy a multi-kilobyte JSON blob and paste it here, after every
+edit to the timeline. The Director has a timeline_data output now, so one wire keeps the
+two in sync and that half is settled.
 
-Two things would have to change before this ships again:
-  1. a timeline_data output on the Director, so one wire keeps the two in sync;
-  2. a decision about the design itself. Swallowing the sampler and both decoders costs
-     the live preview, per-window progress, clean interruption, and duplicates half the
-     Director's canvas settings. Long-form video deserves its own interaction model
-     rather than being bolted onto this one.
+What is still open is the design itself. Swallowing the sampler and both decoders costs
+the live preview, per-window progress, clean interruption, and duplicates half the
+Director's canvas settings. Long-form video deserves its own interaction model rather than
+being bolted onto this one — and until that is answered this node stays unregistered.
 
 Frame anchors are deliberately not here either: this node still resolves a timeline image
 to first_frame / last_frame and nothing else, the way the Director did before it learned to

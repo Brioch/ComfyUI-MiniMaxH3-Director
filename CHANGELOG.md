@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The timeline is on a wire.** `timeline_data` — the editor's JSON state, the thing that
+  says where every shot, reference and anchor falls — has always been an input the Director
+  reads and nothing else could reach. It is hidden on the node, and the editor attaches to
+  the Director alone, so the only way to hand it to another node was to right-click, open
+  Properties, copy a multi-kilobyte blob, and do it again after every edit. There is a
+  `timeline_data` **output** now, the string passed straight through, so one wire keeps a
+  downstream node in step with the timeline as it changes.
+
+  It is last in the output list, after `retake_info`, because links are serialised by output
+  index and a slot inserted above that one would quietly rewire every workflow already saved.
+
+  Reading it runs the Director: ComfyUI has no lazy path for an output, so a node asking for
+  the string gets a full window sampled on the way. That is free when the Director is in the
+  graph rendering anyway, and it is not free when it is not.
+
 - **An image in the middle of the window is sent where it sits.** H3 gives the first and the
   last frame a slot of its own, and for a long time that was the whole story: anything between
   them had no position to be sent at, so it was counted in the warnings and dropped. A

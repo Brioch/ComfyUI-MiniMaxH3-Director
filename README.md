@@ -133,7 +133,7 @@ Five nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
-| **MiniMax H3 Director** | The timeline. Outputs a patched `model`, the compiled `positive` conditioning, an empty joint AV `latent`, the muxed `combined_audio`, plus `fps` / `width` / `height` / `length` / `prompt` / `retake_info`. |
+| **MiniMax H3 Director** | The timeline. Outputs a patched `model`, the compiled `positive` conditioning, an empty joint AV `latent`, the muxed `combined_audio`, plus `fps` / `width` / `height` / `length` / `prompt` / `retake_info` / `timeline_data`. |
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
 | **MiniMax H3 Enhance Prompt** | A local vision model writes the prompt from your reference images. |
@@ -1000,10 +1000,19 @@ across the whole thing instead of the generated one.
 ## Longer than 15 seconds
 
 Not solved yet. There was a **Director Chain** node that rendered a long timeline as a
-chain of anchored windows, and its sampling worked — but there was no usable way to hand
-it a timeline, so it has been withdrawn rather than shipped as a feature nobody can
-operate. The code stays in the repository; the reasoning is written down at the top of
-`minimax_chain.py`.
+chain of anchored windows, and its sampling worked — but it swallowed the sampler and both
+decoders to do it, which costs the live preview, per-window progress and clean
+interruption. It is withdrawn until long-form has an interaction model of its own rather
+than one bolted onto this node. The code stays in the repository; the reasoning is written
+down at the top of `minimax_chain.py`.
+
+What any node planning its own windows does have is the **`timeline_data`** output: the
+editor's JSON state, the same string the Director itself reads, on a wire instead of behind
+right-click > Properties. Anything downstream that wants to know where the shots fall can
+read it and stay in sync with the timeline as it is edited, which is what used to take a
+copy-paste after every edit. It costs a render to fetch — an output is not lazy, so asking
+for it runs the Director — free if the Director is in the graph making a window anyway, and
+not free if it is not.
 
 **4–15 s is H3's trained range, not a cap.** Nothing in this pack limits the length, and
 longer windows do render — reported working at 45 s, and the model card's envelope is
