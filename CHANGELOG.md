@@ -13,9 +13,43 @@
   It is last in the output list, after `retake_info`, because links are serialised by output
   index and a slot inserted above that one would quietly rewire every workflow already saved.
 
-  Reading it runs the Director: ComfyUI has no lazy path for an output, so a node asking for
-  the string gets a full window sampled on the way. That is free when the Director is in the
-  graph rendering anyway, and it is not free when it is not.
+  Reading it runs the Director: ComfyUI has no lazy path for an output, so a node asking only
+  for the string still gets one checkpoint resolved, the prompt encoded and the keyframes
+  VAE'd, all of it thrown away. No sampling — the Director hands out an empty latent and
+  SamplerCustomAdvanced does that — so the bill is an encode pass, not a render.
+
+- **MiniMax H3 Director Chain is in the menu.** It renders a timeline longer than one H3
+  shot as a sequence of in-range windows, each planned from the same timeline and each
+  opening on the last frame of the one before. It has existed in the repository since 0.1.0
+  and been withdrawn since 0.1.2 — the sampling worked, but the only way to hand it a
+  timeline was to copy a multi-kilobyte blob out of the Director's Properties panel after
+  every edit. The `timeline_data` output is that wire, so the node is registered again.
+
+  What it costs is on the node and in the README rather than discovered: sampling happens
+  inside it, which is the only way a chain can work — the anchor for window N+1 does not
+  exist until window N has been decoded, and a static graph cannot express that — but it
+  means no live preview, no per-window progress, no clean interruption mid-chain, and a
+  second copy of the canvas settings. The seam is resolution-bound too: measured error at
+  the join was 5.2x the median frame-to-frame difference at 480x288 and 2.3x at 1024x576,
+  so chain at the larger canvas. **Longer than 15 seconds** in the README wires it socket by
+  socket, including the one that is easy to get wrong: BasicScheduler takes the Director's
+  `model`, not the raw loader, because sigmas follow the sigma shift.
+
+- **The Chain places frame anchors, so a middle image is no longer eaten.** While it was
+  withdrawn the planner learned to anchor an image where it sits, and an anchored image is
+  taken *out* of the reference slots — it is a frame of the video, not a reference. The
+  Chain read the slots and never placed an anchor, so every middle image on the timeline
+  would have vanished from a chained render without a word. It now runs the Director's own
+  `anchor_guides` per window, images, reference clips and audio alike. An anchor landing on
+  frame 0 of a chained window is skipped and named in the log, because that frame belongs to
+  the previous window's last frame and continuity outranks the timeline there.
+
+- **An empty CLIP or VAE says so.** Neither socket was guarded, so a wire to the wrong
+  output — indistinguishable from no wire, both arrive as `None` — reached core's own node
+  and died there as `'NoneType' object has no attribute 'tokenize'`, a screen of traceback
+  naming neither the socket nor the node that wanted it. Both the Director and the Chain now
+  name the empty socket and what to wire into it. `pick_model` has done this for the
+  checkpoints all along; these two had nothing.
 
 - **An image in the middle of the window is sent where it sits.** H3 gives the first and the
   last frame a slot of its own, and for a long time that was the whole story: anything between

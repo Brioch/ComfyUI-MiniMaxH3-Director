@@ -365,6 +365,35 @@ def pick_model(model_fl2va, model_ref2va, ref_mode_on):
     )
 
 
+# What to do about each socket this guards, so the message says the fix and not just the
+# fault. Both are required on every node here, so the answer never depends on the timeline.
+_SOCKET_HELP = {
+    "clip": "wire a CLIPLoader into 'clip'",
+    "vae": "wire the video VAE (minimax_h3_video_vae) into 'vae'",
+}
+
+
+def require_sockets(node, **sockets):
+    """Name the empty socket instead of letting core die on it.
+
+    A CLIP or VAE that is unconnected — or wired to the wrong output, which arrives the same
+    way — reaches core's own node as None and dies there as "'NoneType' object has no
+    attribute 'tokenize'": a screen of traceback naming neither the socket nor the node that
+    wanted it. pick_model already does this for the checkpoints; these two had nothing.
+
+    The lazy model input is resolved before execute() runs, so this cannot save the
+    checkpoint load — it saves the prompt encode, the reference images, and on the Chain
+    every window after the one that would have failed.
+    """
+    missing = [name for name, value in sockets.items() if value is None]
+    if not missing:
+        return
+    raise ValueError("%s: %s not connected — %s. A socket wired to the wrong output is "
+                     "empty here the same way as one left unwired." % (
+                         node, " and ".join(missing),
+                         "; ".join(_SOCKET_HELP[name] for name in missing)))
+
+
 def _grab_base_frame(video_ref, frame_index, fps):
     """One frame out of the retake base video, by timeline frame index."""
     if frame_index < 0:
@@ -511,7 +540,8 @@ class MiniMaxH3Director(io.ComfyNode):
                 io.String.Output(display_name="timeline_data",
                                  tooltip="The timeline editor's JSON state, passed straight through, for a node "
                                          "that plans its own windows from the timeline. Reading it runs the "
-                                         "Director — there is no lazy path for an output."),
+                                         "Director — an output is never lazy — so the prompt is encoded and the "
+                                         "keyframes VAE'd whether or not anything uses them."),
             ],
         )
 
@@ -557,6 +587,7 @@ class MiniMaxH3Director(io.ComfyNode):
                 width=None, height=None) -> io.NodeOutput:
 
         mm = core()
+        require_sockets("MiniMax H3 Director", clip=clip, vae=vae)
         tdata = plan.parse_timeline(timeline_data)
         fps = float(frame_rate) if frame_rate else 24.0
 

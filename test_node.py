@@ -92,7 +92,8 @@ def _schema_inputs(node_cls):
     return [i.id for i in schema.inputs]
 
 
-for node_cls in (package.MiniMaxH3Director, package.MiniMaxH3EnhancePrompt,
+for node_cls in (package.MiniMaxH3Director, package.MiniMaxH3DirectorChain,
+                 package.MiniMaxH3EnhancePrompt,
                  package.MiniMaxH3PreviewOverride, package.MiniMaxH3RetakeStitch,
                  package.MiniMaxH3SaveLastFrame):
     params = inspect.signature(node_cls.execute.__func__).parameters
@@ -129,9 +130,22 @@ def _node_output_arity(func):
                if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "NodeOutput")
 
 
-check("the Director returns one value per declared output",
-      _node_output_arity(package.MiniMaxH3Director.execute.__func__),
-      len(package.MiniMaxH3Director.define_schema().outputs))
+for node_cls in (package.MiniMaxH3Director, package.MiniMaxH3DirectorChain):
+    check("%s returns one value per declared output" % node_cls.__name__,
+          _node_output_arity(node_cls.execute.__func__),
+          len(node_cls.define_schema().outputs))
+
+# A node is registered in three places that have to agree — the class map, the display-name
+# map, and the schema's own node_id. Two of the three is how a node ends up in the menu
+# under a name nothing can load, or loadable under no name at all.
+check("every registered class is keyed by its own node_id",
+      sorted(k for k, cls in package.NODE_CLASS_MAPPINGS.items()
+             if cls.define_schema().node_id == k),
+      sorted(package.NODE_CLASS_MAPPINGS))
+check("every registered class has a display name",
+      sorted(package.NODE_DISPLAY_NAME_MAPPINGS), sorted(package.NODE_CLASS_MAPPINGS))
+check("the Chain is registered", package.NODE_CLASS_MAPPINGS.get("MiniMaxH3DirectorChainCS"),
+      package.MiniMaxH3DirectorChain)
 
 
 # ------------------------------------------------------------------ resolve_size (#14)
@@ -156,6 +170,27 @@ check_raises("a negative width is refused too",
              lambda: rs(0, 0, -8, None), "the connected 'width' is -8")
 check_raises("the message says how to ask for the automatic canvas",
              lambda: rs(0, 0, 0, None), "Leave the socket unconnected")
+
+# ------------------------------------------------------- require_sockets (clip / vae)
+# An empty CLIP or VAE used to reach core and die there as "'NoneType' object has no
+# attribute 'tokenize'", naming neither the socket nor the node. Both nodes share one guard.
+req = director.require_sockets
+
+check("both connected is silent", req("N", clip=object(), vae=object()), None)
+check_raises("an empty clip is named", lambda: req("N", clip=None, vae=object()),
+             "N: clip not connected")
+check_raises("and says what to wire into it", lambda: req("N", clip=None, vae=object()),
+             "wire a CLIPLoader into 'clip'")
+check_raises("an empty vae is named", lambda: req("N", clip=object(), vae=None),
+             "N: vae not connected")
+check_raises("and names the file, not just the socket",
+             lambda: req("N", clip=object(), vae=None), "minimax_h3_video_vae")
+check_raises("both empty are reported together", lambda: req("N", clip=None, vae=None),
+             "clip and vae not connected")
+# the wrong wire is the case that prompted this, and it is indistinguishable from no wire
+check_raises("the message covers a socket wired to the wrong output",
+             lambda: req("N", clip=None, vae=None), "wired to the wrong output")
+
 
 # ---------------------------------------------------------------- resolve_window (#4)
 # Same automation hazard, older sockets — checked here because the harness now exists.

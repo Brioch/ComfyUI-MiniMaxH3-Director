@@ -129,11 +129,12 @@ can read it before you spend a render on it.
 
 ## What you get
 
-Five nodes, category **MiniMax H3**:
+Six nodes, category **MiniMax H3**:
 
 | Node | What it does |
 |---|---|
 | **MiniMax H3 Director** | The timeline. Outputs a patched `model`, the compiled `positive` conditioning, an empty joint AV `latent`, the muxed `combined_audio`, plus `fps` / `width` / `height` / `length` / `prompt` / `retake_info` / `timeline_data`. |
+| **MiniMax H3 Director Chain** | Renders a timeline longer than one shot, as a chain of windows that each open on the last frame of the one before. Samples internally. |
 | **MiniMax H3 Preview Override** | Watch the whole shot denoise, not a single frozen frame. |
 | **MiniMax H3 Retake Stitch** | Splices a regenerated range back into the base video. |
 | **MiniMax H3 Enhance Prompt** | A local vision model writes the prompt from your reference images. |
@@ -999,29 +1000,92 @@ across the whole thing instead of the generated one.
 
 ## Longer than 15 seconds
 
-Not solved yet. There was a **Director Chain** node that rendered a long timeline as a
-chain of anchored windows, and its sampling worked — but it swallowed the sampler and both
-decoders to do it, which costs the live preview, per-window progress and clean
-interruption. It is withdrawn until long-form has an interaction model of its own rather
-than one bolted onto this node. The code stays in the repository; the reasoning is written
-down at the top of `minimax_chain.py`.
+**MiniMax H3 Director Chain** renders a timeline longer than one shot as a sequence of
+in-range windows, each planned from the same timeline and each opening on the last frame of
+the window before it, so the cut is continuous. Wire the Director's **`timeline_data`**
+output into the Chain's `timeline_data` input and the two stay in step as you edit.
 
-What any node planning its own windows does have is the **`timeline_data`** output: the
-editor's JSON state, the same string the Director itself reads, on a wire instead of behind
-right-click > Properties. Anything downstream that wants to know where the shots fall can
-read it and stay in sync with the timeline as it is edited, which is what used to take a
-copy-paste after every edit. It costs a render to fetch — an output is not lazy, so asking
-for it runs the Director — free if the Director is in the graph making a window anyway, and
-not free if it is not.
+Sampling happens inside the node, so it takes a `SAMPLER` and `SIGMAS` the way
+SamplerCustomAdvanced does rather than feeding a KSampler after it. That is not a style
+choice — the anchor for window N+1 does not exist until window N has been decoded, which a
+static graph cannot express — but it is worth knowing what it costs: no live preview, no
+per-window progress bar, no clean interruption mid-chain, and a second copy of the canvas
+settings on the node's face.
+
+### Wiring it
+
+The Chain replaces the sampler half of the graph, not the Director — you keep the Director
+for the editor and the timeline, and its `positive` and `latent` outputs simply go nowhere.
+
+```
+UNETLoader x2 -+
+CLIPLoader   --+--> MiniMax H3 Director --+--> timeline_data --+
+VAELoader x2 --+                           |                   |
+      |                                    +--> model          |
+      |                                      |                 |
+      |                               BasicScheduler           |
+      |                                      |                 |
+      |                                   sigmas               |
+      |                                      |                 |
+      |   KSamplerSelect --> sampler         |                 |
+      |                        |             |                 |
+      +-----------------+------+-------------+-----------------+
+                        |
+            MiniMax H3 Director Chain
+                        |
+  images / audio / fps -+--> CreateVideo --> SaveVideo
+```
+
+1. **The loaders go to both nodes.** Same `UNETLoader` (fl2va) into `model`, same second one
+   (ref2va) into `model_ref2va`, same `CLIPLoader` into `clip`, the video VAE into `vae`, the
+   audio VAE into `audio_vae`. Both models stay lazy, so only the one the toolbar asks for is
+   read.
+2. **Director `timeline_data` → Chain `timeline_data`.** That one wire is the whole sync.
+3. **`KSamplerSelect` → `sampler`.**
+4. **`BasicScheduler` → `sigmas`, fed from the Director's `model` output** — not from the
+   raw `UNETLoader`. Sigmas depend on the sigma shift, the Director's `model` carries it, and
+   the Chain applies its own internally, so keep the Chain's `shift_video` / `shift_audio`
+   equal to the Director's or the two halves disagree about the schedule.
+5. **Chain `images` / `audio` / `fps` → `CreateVideo` → `SaveVideo`.** No `VAEDecode` pair
+   here: the Chain decodes each window itself, which is why it wants the two VAEs.
+
+**Setting the length.** `duration_frames` is the total to render in *timeline* frames at
+`frame_rate` — the Director's own window widgets do not reach the Chain. `start_frame` says
+where on the timeline to begin. `window_seconds` (default 5, max 15) is how long each window
+runs before the next one anchors onto it; 5 s is H3's sweet spot and why the default sits
+there. 360 frames at 24 fps in 5 s windows is three windows, and a final stub under a third
+of a window is folded into the one before it rather than rendered as a sliver. `noise_seed`
+is a base — window *n* uses `seed + n`.
+
+**What is not on this node.** There is no `ref_images` socket, so the Director's reference
+*panel* slots are not planned here; timeline images and the reference tracks are. **Preview
+Override does nothing for a chained render** — the sampling is inside the Chain, so there is
+no live preview, no per-window progress beyond the bar, and an interrupt lands between
+windows rather than inside one.
+
+**Reading the log** is how you check it did what you meant:
+
+```
+[MiniMaxChain] 3 window(s) of ~5.0s over 15.0s total.
+[MiniMaxDirector] Anchored 'shot-2.png' at frame 48 (2.00s).
+[MiniMaxChain] window 1/3 done: 124 frames (fl2va)
+```
+
+The first line confirms the split before anything samples. An `Anchored` line per middle
+image is the one to look for — those images are frames of the video, not references, so
+their absence means they never reached the model.
+
+**The seam is resolution-bound.** Measured error at the join was 5.2x the median
+frame-to-frame difference at 480x288, and 2.3x at 1024x576 — so chain at the larger canvas,
+where the join is roughly twice as hard to see.
 
 **4–15 s is H3's trained range, not a cap.** Nothing in this pack limits the length, and
 longer windows do render — reported working at 45 s, and the model card's envelope is
 simply where quality is known to hold. Past it, expect drift and looping, and a render
 time that climbs faster than the video does: attention cost goes with the square of the
 sequence, while memory grows roughly with its length. The node says so once in the console
-and once in the prompt panel, and then gets out of the way.
-
-For a dependable long piece the answer is still several in-range windows spliced together.
+and once in the prompt panel, and then gets out of the way. One long window is the other
+way to go past 15 s, and the Chain is the dependable one.
 
 ## Troubleshooting
 

@@ -1,42 +1,32 @@
 """Render a timeline longer than one H3 shot, as a chain of anchored windows.
 
-WITHDRAWN — this node is not registered in __init__.py and does not appear in the menu.
+The timeline arrives on a wire: the Director has a timeline_data output, so this node reads
+the same JSON the editor writes and stays in step with it. That was the blocker that kept
+this unregistered — the only route used to be right-click the Director, open Properties,
+copy a multi-kilobyte blob and paste it here, after every edit.
 
-The sampling here works; it was verified against a live server, one window per toolbar
-mode, correct frame counts. Giving it a timeline used to be the other problem — the editor
-in js/minimax_director.js attaches only to MiniMaxH3DirectorCS, that widget is hidden on
-the Director (HIDDEN_WIDGET_NAMES), and the only route left was to right-click the
-Director, open Properties, copy a multi-kilobyte JSON blob and paste it here, after every
-edit to the timeline. The Director has a timeline_data output now, so one wire keeps the
-two in sync and that half is settled.
+Know what it costs before wiring it up. Sampling happens inside the node, which is what
+makes the chain possible at all — the anchor for window N+1 does not exist until window N
+has been decoded, and a static graph cannot express that — but it means the live preview,
+per-window progress and clean interruption that a KSampler in the graph would give you are
+not there, and half the Director's canvas settings are duplicated on this node's face.
+Long-form video probably deserves an interaction model of its own; this is the one that
+exists.
 
-What is still open is the design itself. Swallowing the sampler and both decoders costs
-the live preview, per-window progress, clean interruption, and duplicates half the
-Director's canvas settings. Long-form video deserves its own interaction model rather than
-being bolted onto this one — and until that is answered this node stays unregistered.
+Seam quality is resolution-bound: measured error at the join was 5.2x the median
+frame-to-frame difference at 480x288, and 2.3x at 1024x576. Chain at the larger canvas.
 
-Frame anchors are deliberately not here either: this node still resolves a timeline image
-to first_frame / last_frame and nothing else, the way the Director did before it learned to
-anchor a middle one. Adding them to a node no one can hand a timeline to would be code that
-cannot be run, let alone tested.
-
-Seam quality is also resolution-bound: measured error at the join was 5.2x the median
-frame-to-frame difference at 480x288, and 2.3x at 1024x576.
-
---- what it was meant to do -------------------------------------------------------
+--- what it does ------------------------------------------------------------------
 
 MiniMax H3 is trained for roughly 5 to 15 seconds (124-362 frames at 24 fps). Past that
 it drifts, loops, or runs out of VRAM. This node renders a long timeline as a sequence of
 in-range windows instead: each window is planned from the same timeline, and every window
 after the first opens on the previous window's final frame, so the cut is continuous.
 
-Sampling happens inside the node — it takes a SAMPLER and SIGMAS like
-SamplerCustomAdvanced does — because the anchor for window N+1 does not exist until
-window N has been decoded, which a static graph cannot express.
-
 Everything about *what* each window means comes from minimax_plan, the same planner the
 Director uses, so a chained render and a single-window render read the timeline
-identically.
+identically — frame anchors included, which is why the conditioning here ends with the
+Director's own anchor_guides rather than first_frame / last_frame alone.
 """
 
 import logging
@@ -50,7 +40,7 @@ from comfy_api.latest import io
 from . import minimax_director as director
 from . import minimax_media as media
 from . import minimax_plan as plan
-from .minimax_core import audio_nodes, core, samplers
+from .minimax_core import add_guide, audio_nodes, core, samplers
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +182,7 @@ class MiniMaxH3DirectorChain(io.ComfyNode):
 
         mm = core()
         sm = samplers()
+        director.require_sockets("MiniMax H3 Director Chain", clip=clip, vae=vae)
         tdata = plan.parse_timeline(timeline_data)
         fps = float(frame_rate) if frame_rate else 24.0
 
@@ -273,6 +264,39 @@ class MiniMaxH3DirectorChain(io.ComfyNode):
                     length=p["length"], first_frame=first_frame, last_frame=last_frame)
 
             conditioning, latent = director._unpack(out)[:2]
+
+            # Anchors, exactly as the Director places them. Not optional politeness: the
+            # planner takes an anchored image *out* of ref_image_slots — it is a frame of
+            # the video, not a reference — so a node that reads the slots and never places
+            # the anchors drops every middle image on the timeline without saying so.
+            anchors = [e for e in p["events"] if e.get("anchor_frame") is not None]
+            audio_anchors = p.get("audio_anchors") or []
+            if p["ref_mode_on"]:
+                anchors = anchors + director.load_clip_anchors(
+                    p.get("video_anchors") or [], fps, win_start)
+            if index > 0:
+                # frame 0 of a chained window is the previous window's last frame, and the
+                # contract here is that continuity outranks the timeline. Say which image
+                # lost rather than letting the two write the same cond block.
+                kept = [e for e in anchors if int(e["anchor_frame"]) != 0]
+                for e in anchors:
+                    if int(e["anchor_frame"]) == 0:
+                        log.info("[MiniMaxChain] '%s' lands on frame 0 of window %d, which "
+                                 "the previous window's last frame owns — not anchored.",
+                                 plan.seg_name(e["seg"]), index + 1)
+                anchors = kept
+            guide = add_guide()
+            if (anchors or audio_anchors) and guide is None:
+                log.warning("[MiniMaxChain] %d anchor(s) fall inside window %d and this "
+                            "ComfyUI has no 'Add Guide for MiniMax H3' node to place them "
+                            "with — it arrived in 0.34.0. They were ignored: update "
+                            "ComfyUI, or set them back to references.",
+                            len(anchors) + len(audio_anchors), index + 1)
+                anchors = audio_anchors = []
+            if anchors or audio_anchors:
+                conditioning = director.anchor_guides(
+                    guide, conditioning, latent, anchors, audio_anchors,
+                    fit, vae, audio_vae, p["length"], fps)
 
             guider = director._unpack(sm.BasicGuider.execute(
                 model=patched_model, conditioning=conditioning))[0]
